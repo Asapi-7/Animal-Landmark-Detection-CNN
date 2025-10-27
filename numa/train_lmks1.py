@@ -1,51 +1,22 @@
-import numpy as np
+# =================================================================
+# 0. 必要なライブラリのインポート
+# =================================================================
 import os
 import torch
-
-def load_landmarks_from_pts(pts_path):
-    """
-    .ptsファイルからランドマーク座標を読み込み、フラットなテンソルで返す。
-    """
-    try:
-        with open(pts_path, 'r') as f:
-            lines = f.readlines()
-
-        # 座標データが始まる行を見つける
-        start_index = lines.index('{\n') + 1
-        end_index = lines.index('}\n')
-
-        # 座標部分だけを抽出し、NumPy配列に変換
-        coords = []
-        for line in lines[start_index:end_index]:
-            x, y = map(float, line.strip().split())
-            coords.extend([x, y]) # [x1, y1, x2, y2, ...] の順で平坦化
-
-        # [18] の形状のPyTorch Tensorとして返す
-        return torch.tensor(coords, dtype=torch.float32)
-
-    except Exception as e:
-        print(f"Error loading {pts_path}: {e}")
-        # エラー時は0埋めされたダミーデータを返すなどの例外処理が必要
-        return torch.zeros(18, dtype=torch.float32)
-        import numpy as np
-import os
-import torch
+import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+from torchvision.models import resnet18
 from PIL import Image
 
-# ターゲットサイズをあなたのデータセット作成コードに合わせる
+# ターゲットサイズ (データセット作成コードと合わせる)
 IMG_SIZE = 224
 
 # =================================================================
 # 1. ランドマーク座標 (.pts) の読み込み関数
-# (あなたの load_pts_file ロジックを PyTorch で利用)
 # =================================================================
 def load_landmarks_from_pts_to_tensor(pts_path):
-    """
-    .ptsファイルからランドマーク座標を読み込み、平坦化されたテンソルで返す。
-    注意: この関数は、データセット作成時に既にスケーリングされた座標を読み込む。
-    """
+    """ .ptsファイルから9点のランドマーク座標を読み込み、平坦化されたTensor [18] で返す """
     points = []
     with open(pts_path, 'r') as f:
         lines = f.readlines()
@@ -55,21 +26,19 @@ def load_landmarks_from_pts_to_tensor(pts_path):
         if line.strip() == '{':
             start_index = i + 1
             break
-
-    # .ptsファイルの行数が多いため、正確に9点だけを読む
+            
+    # 9点分を抽出
     for line in lines[start_index : start_index + 9]:
         try:
             x, y = map(float, line.strip().split())
-            points.extend([x, y]) # [x1, y1, x2, y2, ...] の順で平坦化 (18要素)
+            points.extend([x, y]) # [x1, y1, x2, y2, ...] の順 (18要素)
         except ValueError:
-            # データセット作成コードの挙動に合わせ、不正な行はスキップ
+             # 不正な行は無視
             continue
 
-    # データセット作成コードの検証ステップに合わせる
     if len(points) != 18:
-         raise ValueError(f"Expected 18 coordinates (9 points), but found {len(points)} in {pts_path}")
+          raise ValueError(f"Expected 18 coordinates (9 points), but found {len(points)} in {pts_path}")
 
-    # [18] の形状のPyTorch Tensorとして返す
     return torch.tensor(points, dtype=torch.float32)
 
 # =================================================================
@@ -81,7 +50,7 @@ class LandmarkDataset(Dataset):
         self.image_files = []
         self.landmark_files = []
 
-        # ファイルペアのリスト作成
+        # ファイルペアのリスト作成 (cropped_dataset内の.jpgと.ptsのペアを探す)
         for filename in os.listdir(data_dir):
             if filename.endswith(".jpg"):
                 img_path = os.path.join(data_dir, filename)
@@ -91,12 +60,10 @@ class LandmarkDataset(Dataset):
                     self.image_files.append(img_path)
                     self.landmark_files.append(pts_path)
 
-        # モデルに合わせた最終的な画像変換を定義
+        # モデルへの入力に合わせた最終的な画像変換 (正規化)
         self.transform = transforms.Compose([
-            # データセット作成コードで既に224x224にリサイズされているが、
-            # 念のためResizeを入れ、ToTensorで[C, H, W]に変換
-            transforms.ToTensor(),
-            # 標準化 (ImageNetの統計値を使用)
+            transforms.ToTensor(), # HWC -> CHW, 0-255 -> 0-1
+            # ImageNetの統計値で標準化
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
@@ -104,37 +71,108 @@ class LandmarkDataset(Dataset):
         return len(self.image_files)
 
     def __getitem__(self, idx):
-        # 画像の読み込み (PIL)
         img_path = self.image_files[idx]
-        image = Image.open(img_path).convert("RGB")
+        image = Image.open(img_path).convert("RGB") # 画像をRGBで読み込み
+        image = self.transform(image) # 変換と正規化を実行
 
-        # データセット作成コードでIMG_SIZEにリサイズされているので、ここではテンソル変換と正規化のみ
-        image = self.transform(image)
-
-        # 座標の読み込み (スケーリング済み相対座標 [18] テンソル)
         pts_path = self.landmark_files[idx]
-        landmarks = load_landmarks_from_pts_to_tensor(pts_path)
+        landmarks = load_landmarks_from_pts_to_tensor(pts_path) # 座標 [18] を読み込み
 
         return image, landmarks
 
 # =================================================================
-# 3. DataLoader の準備と確認
+# 3. モデル定義 (ResNet18 + GAP + Dense層)
 # =================================================================
-DATA_DIR = "./cropped_dataset"
-BATCH_SIZE = 32
+class LandmarkRegressor(nn.Module):
+    def __init__(self, num_landmarks=9):
+        super(LandmarkRegressor, self).__init__()
+        
+        # 1. Backbone: ResNet18 (学習済み重みを使用)
+        self.backbone = resnet18(weights='IMAGENET1K_V1') 
+        
+        # 2. Head: Dense層 (最終層) の変更
+        num_features = self.backbone.fc.in_features # ResNet18の最終層の入力サイズ (512)
+        
+        # 3. 出力層をランドマークの数 (18) に置き換え (GAPはResNet内部に含まれる)
+        self.backbone.fc = nn.Linear(num_features, num_landmarks * 2)
 
-dataset = LandmarkDataset(data_dir=DATA_DIR)
-print(f"データセットの画像数: {len(dataset)}")
+    def forward(self, x):
+        # 画像 x を入力として ResNet に流し込み、[batch_size, 18] の出力
+        return self.backbone(x)
 
-data_loader = DataLoader(
-    dataset,
-    batch_size=BATCH_SIZE,
-    shuffle=True,
-    num_workers=4
-)
+# =================================================================
+# 4. メインの訓練関数
+# =================================================================
+def train_model():
+    # --- パラメータ設定 ---
+    DATA_DIR = "./cropped_dataset" # 訓練データセットのパス
+    BATCH_SIZE = 32
+    NUM_LANDMARKS = 9
+    NUM_EPOCHS = 20
+    LEARNING_RATE = 0.001
+    
+    # --- デバイス設定 ---
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print(f"訓練デバイス: {device}")
+    
+    # --- データローダーの準備 ---
+    try:
+        dataset = LandmarkDataset(data_dir=DATA_DIR)
+        print(f"データセットの画像数: {len(dataset)}")
+    except Exception as e:
+        print(f"データセットの初期化エラー: {e}")
+        print("cropped_dataset フォルダが./ (カレントディレクトリ) に存在し、データが揃っているか確認してください。")
+        return
+        
+    data_loader = DataLoader(
+        dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=4
+    )
+    
+    # --- モデル、損失関数、最適化手法の設定 ---
+    model = LandmarkRegressor(num_landmarks=NUM_LANDMARKS)
+    model.to(device)
+    
+    # 損失関数: 平均二乗誤差 (回帰タスク用)
+    criterion = nn.MSELoss() 
+    # 最適化手法: Adam
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    
+    # --- 訓練ループ ---
+    print("\n--- 訓練開始 ---")
+    for epoch in range(NUM_EPOCHS):
+        model.train() # 訓練モード
+        running_loss = 0.0
+        
+        for i, (images, targets) in enumerate(data_loader):
+            images = images.to(device)
+            targets = targets.to(device)
+            
+            optimizer.zero_grad() # 勾配をゼロクリア
+            
+            outputs = model(images) # 順伝播
+            loss = criterion(outputs, targets) # 損失計算
+            
+            loss.backward() # 逆伝播
+            optimizer.step() # パラメータ更新
+            
+            running_loss += loss.item()
+            
+            if (i + 1) % 50 == 0:
+                print(f"Epoch [{epoch+1}/{NUM_EPOCHS}], Step [{i+1}/{len(data_loader)}], Loss: {running_loss / (i+1):.4f}")
+                
+        avg_epoch_loss = running_loss / len(data_loader)
+        print(f"--- Epoch [{epoch+1}/{NUM_EPOCHS}] 完了. 平均損失: {avg_epoch_loss:.4f} ---")
 
-# 例として最初のバッチを確認
-# for images, targets in data_loader:
-#     print(f"入力画像テンソルの形状: {images.shape}")
-#     print(f"ターゲット座標テンソルの形状: {targets.shape}")
-#     break
+    # --- モデルの保存 ---
+    MODEL_PATH = 'landmark_regressor_final.pth'
+    torch.save(model.state_dict(), MODEL_PATH)
+    print(f"\nモデルが '{MODEL_PATH}' として保存されました。")
+
+# =================================================================
+# 5. スクリプト実行
+# =================================================================
+if __name__ == '__main__':
+    train_model()
