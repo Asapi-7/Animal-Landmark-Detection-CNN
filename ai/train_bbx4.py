@@ -40,7 +40,7 @@ class AnimalWebDataset(Dataset):
                 albu.HorizontalFlip(p=0.5),
                 albu.Rotate(limit=10, p=0.5),
                 albu.RandomBrightnessContrast(p=0.5),
-                albu.GaussNoise(var_limit=(5.0, 20.0), p=0.5),
+                albu.GaussNoise(p=0.5),
                 self.normalization,
                 ToTensorV2()
             ], bbox_params=bbox_params)
@@ -167,7 +167,6 @@ class ResNet18Custom(nn.Module):
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         x = self.fc(x)
-        x = torch.sigmoid(self.fc(x)) # 0-1に正規化
 
         return x
 
