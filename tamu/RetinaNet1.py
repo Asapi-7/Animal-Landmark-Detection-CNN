@@ -1,27 +1,30 @@
 import os
 import torch
 import numpy as np
+import time
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision.transforms import functional as F
 from torchvision import transforms as T
 from torch.utils.data import DataLoader
+import glob # 👈 追加: ファイルパスのリスト取得用
+from sklearn.model_selection import train_test_split # 👈 追加: データ分割用
 
 # モデル構築用
 from resnet50_backbone import resnet50 
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor
+from torchvision.ops.feature_pyramid_network import LastLevelP6P7 # 👈 以前のModuleNotFoundErrorの修正
 from torchvision.models.detection import RetinaNet
 
 import torch.optim as optim
-import time
-
 
 # データセット
 class CustomObjectDetectionDataset(Dataset):
-    def __init__(self, root, transforms=None):
-        self.root = root
+    # ⚠️ __init__を修正: rootではなく、画像パスのリストを受け取る
+    def __init__(self, img_list, root, transforms=None):
+        self.root = root # .ptsファイルを見つけるためにrootを保持
         self.transforms = transforms
-        self.imgs = sorted([f for f in os.listdir(root) if f.endswith(".jpg")])
+        self.imgs = img_list # 👈 既に分割された画像パスのリストを使用
         
     def _parse_pts(self, pts_path):
         """
@@ -56,19 +59,22 @@ class CustomObjectDetectionDataset(Dataset):
         
     def __getitem__(self, idx):
         # 1. 画像とPTSファイルのパス
-        img_filename = self.imgs[idx]
+        # self.imgs には 'dataset/img001.jpg' のような相対パスが入っていることを想定
+        img_path_full = self.imgs[idx]
+        
+        # rootからファイル名を抽出（img_listが絶対パスの場合、ここではファイル名だけ抽出する）
+        img_filename = os.path.basename(img_path_full)
         base_name = os.path.splitext(img_filename)[0]
         pts_filename = base_name + ".pts"
         
-        img_path = os.path.join(self.root, img_filename)
+        # .ptsファイルのパスを作成
         pts_path = os.path.join(self.root, pts_filename)
 
         # 2. データ読み込み
-        img = Image.open(img_path).convert("RGB")
+        img = Image.open(img_path_full).convert("RGB") # 👈 修正: img_path_fullを使用
         boxes_np, labels_np = self._parse_pts(pts_path)
 
         # 3. ターゲット辞書の作成（RetinaNetの要求形式）
-        # 物体がない場合（boxes_npが空の場合）に対応
         if boxes_np.size == 0:
             boxes = torch.zeros((0, 4), dtype=torch.float32)
             labels = torch.zeros((0,), dtype=torch.int64)
@@ -76,7 +82,6 @@ class CustomObjectDetectionDataset(Dataset):
             boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
             labels = torch.as_tensor(labels_np, dtype=torch.int64)
         
-        # その他の必須ではないキーを追加
         target = {}
         target["boxes"] = boxes
         target["labels"] = labels
@@ -84,7 +89,6 @@ class CustomObjectDetectionDataset(Dataset):
         
         # 4. 変換（transforms）の適用
         if self.transforms is not None:
-            # PyTorch Object Detectionモデルでは、画像とターゲットの両方に変換を適用します
             img, target = self.transforms(img, target)
 
         return img, target
@@ -92,47 +96,74 @@ class CustomObjectDetectionDataset(Dataset):
     def __len__(self):
         return len(self.imgs)
 
-# Transformsの定義(画像の前処理・データ拡張)
+# Transformsの定義
 def get_transform(train):
-    """トレーニング（学習）用と評価用の変換パイプラインを定義"""
-    
-    # 標準的な前処理
     t = [T.ToTensor()] 
-    
     if train:
-        # 学習時のみ行うデータ拡張（オプション）
         # t.append(T.RandomHorizontalFlip(0.5))
         pass 
-        
     return T.Compose(t)
 
 
-# Collate Functionの定義(データを1つにまとめるバッチ形式に変換する)
+# Collate Functionの定義
 def custom_collate_fn(batch):
     images = [item[0] for item in batch]
     targets = [item[1] for item in batch]
     return images, targets
 
-# DataLoaderの構築
-# データのルートディレクトリを指定 
+# =========================================================
+# データの読み込みと分割 (この部分がデータセット分割の核心です)
+# =========================================================
+
+# データのルートディレクトリを指定（画像と.ptsファイルがある場所）
 DATA_ROOT = '/workspace/dataset'
 
-# Datasetのインスタンス作成
-dataset = CustomObjectDetectionDataset(DATA_ROOT, get_transform(train=True))
+# 1. 全ての画像ファイルパスを取得
+# os.path.join(DATA_ROOT, "*.jpg") は、例: /workspace/dataset/*.jpg になります
+all_imgs = sorted(glob.glob(os.path.join(DATA_ROOT, "*.jpg")))
 
-# DataLoaderの作成
+print(f"発見した全サンプル数: {len(all_imgs)}")
+
+# 2. 学習用 (80%) とテスト用 (20%) に分割
+# test_size=0.2 で 20% をテスト用に割り当てる
+train_imgs, test_imgs = train_test_split(
+    all_imgs, 
+    test_size=0.2, 
+    random_state=42 # シード固定で再現性を確保
+)
+
+print(f"学習用サンプル数 (80%): {len(train_imgs)}, テスト用サンプル数 (20%): {len(test_imgs)}")
+
+
+# 3. Datasetのインスタンス作成（分割したリストを渡す）
+train_dataset = CustomObjectDetectionDataset(train_imgs, DATA_ROOT, get_transform(train=True))
+test_dataset = CustomObjectDetectionDataset(test_imgs, DATA_ROOT, get_transform(train=False))
+
+
+# 4. DataLoaderの作成
 train_loader = DataLoader(
-    dataset,
+    train_dataset,
     batch_size=4, 
     shuffle=True,
-    num_workers=2, # 環境に合わせて調整
+    num_workers=2, 
     collate_fn=custom_collate_fn 
 )
 
+# ⚠️ テストローダーも作成
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=4, 
+    shuffle=False, # 評価時はシャッフル不要
+    num_workers=2, 
+    collate_fn=custom_collate_fn 
+)
 
+# =========================================================
+# モデルの構築と学習ループ (変更なし)
+# =========================================================
 
 # ResNet50を使えるようにする
-custom_backbone = resnet50(pretrained=False) # ResNetインスタンスを作成
+custom_backbone = resnet50(pretrained=False) 
 
 # FPNを構築するための設定
 in_channels_list = [512, 1024, 2048]
@@ -140,7 +171,7 @@ out_channels = 256
 
 backbone_fpn = _resnet_fpn_extractor(
     custom_backbone, 
-    return_layers={"layer2": "0", "layer3": "1", "layer4": "2"}, # FPNに渡す層
+    return_layers={"layer2": "0", "layer3": "1", "layer4": "2"}, 
     in_channels_list=in_channels_list, 
     out_channels=out_channels, 
     extra_blocks=LastLevelP6P7(out_channels, out_channels), 
@@ -152,7 +183,6 @@ NUM_CLASSES = 10
 model = RetinaNet(
     backbone=backbone_fpn,
     num_classes=NUM_CLASSES,
-    # weights=None で事前学習済みの重みロードをスキップ
     weights=None 
 )
 
@@ -181,7 +211,6 @@ for epoch in range(num_epochs):
     
     for step, (images, targets) in enumerate(train_loader):
         # 1. データとターゲットをGPUに移動
-        # imagesはリスト、targetsは辞書を含むリスト
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -203,7 +232,7 @@ for epoch in range(num_epochs):
         
         # ログ出力
         if step % 50 == 0:
-            print(f"  Epoch: {epoch+1}/{num_epochs}, Step: {step}, Total Loss: {losses.item():.4f}, Cls Loss: {loss_dict['classification'].item():.4f}")
+            print(f"  Epoch: {epoch+1}/{num_epochs}, Step: {step}, Total Loss: {losses.item():.4f}, Cls Loss: {loss_dict['classification'].item():.4f}")
     
     end_time = time.time()
     print(f"\n--- Epoch {epoch+1} 完了。 平均損失: {total_epoch_loss / len(train_loader):.4f}, 処理時間: {(end_time - start_time):.2f}s ---\n")
