@@ -170,8 +170,8 @@ out_channels = 256
 
 backbone_fpn = _resnet_fpn_extractor(
     custom_backbone, 
-    LastLevelP6P7(out_channels, out_channels),
-    trainable_layers=5
+    trainable_layers=5, 
+    extra_blocks=LastLevelP6P7(out_channels, out_channels)
 )
 
 # RetinaNetモデルの構築
