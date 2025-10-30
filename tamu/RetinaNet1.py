@@ -92,7 +92,7 @@ class CustomObjectDetectionDataset(Dataset):
         
         # 4. 変換（transforms）の適用
         if self.transforms is not None:
-            img, target = self.transforms(img, target)
+            img = self.transforms(img)
 
         return img, target
 
@@ -105,7 +105,7 @@ def get_transform(train):
     if train:
         # t.append(T.RandomHorizontalFlip(0.5))
         pass 
-    return T.Compose(t)
+    return T.ToTensor()
 
 
 # Collate Functionの定義
