@@ -115,7 +115,7 @@ def custom_collate_fn(batch):
 
 # DataLoaderの構築
 # データのルートディレクトリを指定 
-DATA_ROOT = '/data/dataset_folder'
+DATA_ROOT = '/root/dataset'
 
 # Datasetのインスタンス作成
 dataset = CustomObjectDetectionDataset(DATA_ROOT, get_transform(train=True))
