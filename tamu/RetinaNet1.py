@@ -43,6 +43,9 @@ class CustomObjectDetectionDataset(Dataset):
                 parts = line.strip().split()
                 if not parts:
                     continue
+
+                if not parts[0].isdigit(): # ヘッダーをスキップ
+                    continue
                 # 形式: class_id x_min y_min x_max y_max
                 class_id = int(parts[0])
                 # 座標は整数に変換
