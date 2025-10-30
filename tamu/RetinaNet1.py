@@ -10,7 +10,6 @@ from torch.utils.data import DataLoader
 # モデル構築用
 from resnet50_backbone import resnet50 
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor
-from torchvision.models.feature_pyramid_network import LastLevelP6P7
 from torchvision.models.detection import RetinaNet
 
 import torch.optim as optim
