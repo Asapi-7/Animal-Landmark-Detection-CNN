@@ -229,6 +229,6 @@ def _resnet(arch, block, layers, pretrained, progress, **kwargs):
     return model
 
 # ResNet50モデルを生成するためのヘルパー関数
-[docs]def resnet50(pretrained=False, progress=True, **kwargs): # (事前学習重みを使うか、それをDLのとき進捗を表示するか、その他の追加引数)
+def resnet50(pretrained=False, progress=True, **kwargs): # (事前学習重みを使うか、それをDLのとき進捗を表示するか、その他の追加引数)
     return _resnet('resnet50', Bottleneck, [3, 4, 6, 3], pretrained, progress,
                    **kwargs) # 層1～4でそれぞれ[3,4,6,3]回繰り返される
