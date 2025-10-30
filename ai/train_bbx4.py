@@ -8,11 +8,10 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms as T
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
-import albumentations as albu
-from albumentations.pytorch import ToTensorV2
 import cv2
 
 # ==========================================================
@@ -23,32 +22,18 @@ class AnimalWebDataset(Dataset):
         self.img_files = img_files
         self.augment = augment
 
-        self.normalization = albu.Normalize(
-            mean=(0.485, 0.456, 0.406),
-            std=(0.229, 0.224, 0.225)
-        )
+        self.color_transform = T.Compose([
+            T.RandomGrayscale(p=0.2), # ランダムにグレースケール
+            T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1), # 色調変化
+            T.RandomInvert(p=0.1), # ランダムに色反転
+            T.RandomPosterize(bits=4, p=0.1),  # ポスタリゼーション
+            T.RandomSolarize(threshold=192, p=0.1), # ソラリゼーション
+            T.RandomAdjustSharpness(sharpness_factor=2, p=0.2), # シャープネス調整
+            T.RandomAutocontrast(p=0.2), # 自動コントラスト
+            T.RandomEqualize(p=0.1), # ヒストグラム均等化    
+        ])
 
-        bbox_params = albu.BboxParams(
-            format='pascal_voc',
-            label_fields=['labels'],
-            min_visibility=0.1,  # 見えなくなる bbox を削除しすぎない
-            check_each_transform=True
-        )
-
-        if self.augment:
-            self.transform = albu.Compose([
-                albu.HorizontalFlip(p=0.5),
-                albu.Rotate(limit=10, p=0.5),
-                albu.RandomBrightnessContrast(p=0.5),
-                albu.GaussNoise(p=0.5),
-                self.normalization,
-                ToTensorV2()
-            ], bbox_params=bbox_params)
-        else:
-            self.transform = albu.Compose([
-                self.normalization,
-                ToTensorV2()
-            ], bbox_params=bbox_params)
+        self.to_tensor = T.ToTensor()
 
     def __len__(self):
         return len(self.img_files)
@@ -63,6 +48,7 @@ class AnimalWebDataset(Dataset):
         if img is None:
             raise ValueError(f"画像が読み込めません: {img_path}")
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        H, W = img.shape[:2]
 
         # --- バウンディングボックス読み込み ---
         with open(pts_path, "r") as f:
@@ -83,29 +69,30 @@ class AnimalWebDataset(Dataset):
         if len(coords) != 2:
             raise ValueError(f"PTSファイルの形式が不正: {pts_path}")
 
-        bb = [coords[0][0], coords[0][1], coords[1][0], coords[1][1]]
-        labels = [0]  # ダミーラベル
+        x1, y1, x2, y2 = coords[0][0], coords[0][1], coords[1][0], coords[1][1]
+       
+       # --- データ拡張 ---
+        if self.augment:
+            # 1. 左右反転（確率50%）
+            if random.random() > 0.5:
+                img = cv2.flip(img, 1)  # 左右反転
+                # BBoxを反転に合わせて更新
+                x1_new = W - x2
+                x2_new = W - x1
+                x1, x2 = x1_new, x2_new
 
-        # 変換適用
-        transformed = self.transform(image=img, bboxes=[bb], labels=labels)
-        img_tensor = transformed['image']
-        H_new, W_new = img_tensor.shape[1:]
-
-        # --- bbox 消失時の補完・クリップ ---
-        if len(transformed['bboxes']) == 0:
-            # 拡張でbboxが消えた場合、無効な [0,0,0,0] を返す
-            bb_tensor = torch.tensor([0.0, 0.0, 0.0, 0.0], dtype=torch.float32)
+            # 2. 色変換（BBoxに影響しない）
+            pil_img = T.functional.to_pil_image(img)
+            img = self.color_transform(pil_img)
+            img = T.functional.to_tensor(img)  # PIL→Tensor
         else:
-            # 変換後のbboxピクセル座標を取得
-            bb_new_pixels = torch.tensor(transformed['bboxes'][0], dtype=torch.float32)
-            
-            # 変換後のサイズ (H_new, W_new) で正規化 (0-1の範囲に)
-            bb_tensor = bb_new_pixels / torch.tensor([W_new, H_new, W_new, H_new], dtype=torch.float32)
-            
-            # 念のため 0.0-1.0 の範囲にクリップする
-            bb_tensor = torch.clamp(bb_tensor, min=0.0, max=1.0)
+            img = self.to_tensor(img)
 
-        return img_tensor, bb_tensor
+        # --- 正規化BBox（0〜1範囲）---
+        bb = torch.tensor([x1 / W, y1 / H, x2 / W, y2 / H], dtype=torch.float32)
+
+
+        return img, bb
 
 
 # ==========================================================
@@ -276,7 +263,7 @@ for epoch in range(num_epochs):
 # ==========================================================
 # 学習済みモデル評価
 # ==========================================================
-WEIGHT_FILE = "resnet18_animalweb_epoch50.pth"
+WEIGHT_FILE = "resnet18_bbx4_epoch50_.pth"
 
 if os.path.exists(WEIGHT_FILE):
     model_eval = ResNet18Custom(num_output=4).to(device)
