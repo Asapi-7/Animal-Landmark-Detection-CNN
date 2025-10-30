@@ -166,13 +166,11 @@ test_loader = DataLoader(
 custom_backbone = resnet50(pretrained=False) 
 
 # FPNを構築するための設定
-in_channels_list = [512, 1024, 2048]
 out_channels = 256
 
 backbone_fpn = _resnet_fpn_extractor(
     custom_backbone, 
-    return_layers={"layer2": "0", "layer3": "1", "layer4": "2"}, 
-    in_channels_list=in_channels_list, 
+    trainable_layers=5,
     out_channels=out_channels, 
     extra_blocks=LastLevelP6P7(out_channels, out_channels), 
 )
