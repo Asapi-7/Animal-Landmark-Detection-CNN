@@ -250,8 +250,8 @@ for epoch in range(num_epochs):
 
         # FPN出力の特徴マップ数を確認
         with torch.no_grad():
-            images_tensor = torch.stack(images)
-            features = model.backbone(images.tensors)
+            images_tensor = torch.stack(images) 
+            features = model.backbone(images_tensor)
             print("特徴マップの数:", len(features))
             for i, f in enumerate(features):
                 print(f"  特徴マップ {i}: {f.shape}")
