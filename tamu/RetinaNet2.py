@@ -261,7 +261,7 @@ for epoch in range(num_epochs):
     start_time = time.time()
     total_epoch_loss = 0
     
-    for step, (images, targets) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}")):
+    for step, (images, targets) in enumerate(train_loader):
         # 1. データとターゲットをGPUに移動
         images = [image.to(device).to(torch.float32) for image in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -275,9 +275,6 @@ for epoch in range(num_epochs):
         loss_dict = model(images, targets)
         losses = sum(loss for loss in loss_dict.values())
         total_epoch_loss += losses.item()
-
-        if step < 5:
-            print("loss_dict:", loss_dict)
 
            # NaNチェック
         if torch.isnan(losses):
