@@ -11,7 +11,6 @@ import glob # 👈 追加: ファイルパスのリスト取得用
 from sklearn.model_selection import train_test_split # 👈 追加: データ分割用
 
 # モデル構築用
-#from resnet50_backbone import resnet50 
 from resnet50_backbone import resnet18
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor
 from torchvision.ops.feature_pyramid_network import LastLevelP6P7 
@@ -178,9 +177,6 @@ test_loader = DataLoader(
 # モデルの構築と学習ループ (変更なし)
 # =========================================================
 
-# ResNet50を使えるようにする
-#custom_backbone = resnet50(pretrained=False) 
-
 # ResNet18を使えるようにする
 custom_backbone = resnet18(pretrained=False) 
 
@@ -223,8 +219,6 @@ optimizer = optim.SGD(
 
 # 学習するエポック数
 num_epochs = 10 
-
-from torchvision.ops import box_iou
 
 def evaluate_iou(model, dataloader, device):
     model.eval()
