@@ -238,6 +238,11 @@ for epoch in range(num_epochs):
                 print("boxes:", t["boxes"])
                 print("labels:", t["labels"])
 
+        # 2. 勾配をゼロクリア
+        optimizer.zero_grad()
+        # 4. バックワードパス: 勾配を計算
+        losses.backward()
+
         # ここで損失計算
         loss_dict = model(images, targets)
         losses = sum(loss for loss in loss_dict.values())
@@ -254,19 +259,6 @@ for epoch in range(num_epochs):
     # 最初の5ステップだけ損失の中身を表示
         if step < 5:
             print(f"[Step {step}] loss_dict:", {k: f"{v.item():.4f}" for k, v in loss_dict.items()})
-
-        # 2. 勾配をゼロクリア
-        optimizer.zero_grad()
-
-        # 3. フォワードパス: 損失を計算
-        loss_dict = model(images, targets) 
-        
-        # 損失の合計
-        losses = sum(loss for loss in loss_dict.values())
-        total_epoch_loss += losses.item()
-
-        # 4. バックワードパス: 勾配を計算
-        losses.backward()
 
         # 5. オプティマイザのステップ: 重みを更新
         optimizer.step()
