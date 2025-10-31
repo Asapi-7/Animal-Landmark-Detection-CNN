@@ -27,38 +27,48 @@ class CustomObjectDetectionDataset(Dataset):
         self.imgs = img_list # 👈 既に分割された画像パスのリストを使用
         
     def _parse_pts(self, pts_path):
-        """
-        .ptsファイルからバウンディングボックスとラベルをパースする関数
-        """
-        boxes = []
-        labels = []
+    """
+    .ptsファイルから2点 (左上と右下など) を読み取り、
+    バウンディングボックス [xmin, ymin, xmax, ymax] を作る
+    """
+    boxes = []
+    labels = []
 
-        # ファイルが存在するか確認
-        if not os.path.exists(pts_path):
-             # .ptsファイルがない場合は空リストを返す（物体なし）
-             return np.array([], dtype=np.float32).reshape(0, 4), np.array([], dtype=np.int64)
-        
-        with open(pts_path, 'r') as f:
-            for line in f:
-                parts = line.strip().split()
-                if not parts:
-                    continue
+    if not os.path.exists(pts_path):
+        return np.empty((0, 4), dtype=np.float32), np.empty((0,), dtype=np.int64)
 
-                if not parts[0].isdigit(): # ヘッダーをスキップ
-                    continue
-                # 形式: class_id x_min y_min x_max y_max
-                class_id = int(parts[0])
-                # 座標は整数に変換
-                coords = [int(p) for p in parts[1:5]]
-                
-                boxes.append(coords)
-                labels.append(class_id)
-        
-        # NumPy配列に変換
-        boxes = np.array(boxes, dtype=np.float32)
-        labels = np.array(labels, dtype=np.int64)
-        
-        return boxes, labels
+    xs, ys = [], []
+    with open(pts_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            # 空行やヘッダー、波括弧をスキップ
+            if not line or line.startswith("version") or line in ["{", "}"]:
+                continue
+
+            # "129 100" のような座標ペアを読む
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+
+            try:
+                x, y = float(parts[0]), float(parts[1])
+                xs.append(x)
+                ys.append(y)
+            except ValueError:
+                continue
+
+    if len(xs) >= 2 and len(ys) >= 2:
+        xmin, xmax = min(xs), max(xs)
+        ymin, ymax = min(ys), max(ys)
+        boxes = np.array([[xmin, ymin, xmax, ymax]], dtype=np.float32)
+        labels = np.array([1], dtype=np.int64)  # ← 全て同じクラス扱い
+    else:
+        # 点が足りない場合は空にしておく
+        boxes = np.empty((0, 4), dtype=np.float32)
+        labels = np.empty((0,), dtype=np.int64)
+
+    return boxes, labels
+
         
     def __getitem__(self, idx):
         # 1. 画像とPTSファイルのパス
