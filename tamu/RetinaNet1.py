@@ -248,6 +248,14 @@ for epoch in range(num_epochs):
             print(t["boxes"])
             print("---")
 
+        # FPN出力の特徴マップ数を確認
+        with torch.no_grad():
+            features = model.backbone(images.tensors)
+            print("特徴マップの数:", len(features))
+            for i, f in enumerate(features):
+                print(f"  特徴マップ {i}: {f.shape}")
+            break
+        
 
         # 3. フォワードパス: 損失を計算
         loss_dict = model(images, targets) 
