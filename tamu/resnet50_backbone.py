@@ -228,12 +228,7 @@ def _resnet(arch, block, layers, pretrained, progress, **kwargs):
 #        model.load_state_dict(state_dict)
     return model
 
-# resnet18
-def resnet18(pretrained=False, progress=True, **kwargs):
-    return _resnet('resnet18', BasicBlock, [2, 2, 2, 2], pretrained, progress,
-                   **kwargs)
-
 # ResNet50モデルを生成するためのヘルパー関数
-#def resnet50(pretrained=False, progress=True, **kwargs): # (事前学習重みを使うか、それをDLのとき進捗を表示するか、その他の追加引数)
-#    return _resnet('resnet50', Bottleneck, [3, 4, 6, 3], pretrained, progress,
-#                   **kwargs) # 層1～4でそれぞれ[3,4,6,3]回繰り返される
+def resnet50(pretrained=False, progress=True, **kwargs): # (事前学習重みを使うか、それをDLのとき進捗を表示するか、その他の追加引数)
+    return _resnet('resnet50', Bottleneck, [3, 4, 6, 3], pretrained, progress,
+                   **kwargs) # 層1～4でそれぞれ[3,4,6,3]回繰り返される
