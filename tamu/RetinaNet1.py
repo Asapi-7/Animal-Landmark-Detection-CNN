@@ -225,6 +225,13 @@ for epoch in range(num_epochs):
         # 2. 勾配をゼロクリア
         optimizer.zero_grad()
 
+        for t in targets:
+            print("boxes:", t["boxes"].shape, type(t["boxes"]))
+            print("labels:", t["labels"].shape, type(t["labels"]))
+            print(t["boxes"])
+            print("---")
+
+
         # 3. フォワードパス: 損失を計算
         loss_dict = model(images, targets) 
         
