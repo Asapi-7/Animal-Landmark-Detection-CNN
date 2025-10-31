@@ -211,18 +211,8 @@ for epoch in range(num_epochs):
     
     for step, (images, targets) in enumerate(train_loader):
         # 1. データとターゲットをGPUに移動
-        images = list(image.to(device) for image in images)
-        new_targets = []
-        for t in targets:
-            new_t = t.copy()
-            
-            # ボックスがfloat型であることを確認（これがAssertionの原因であるため）
-            if new_t["boxes"].dtype != torch.float32:
-                new_t["boxes"] = new_t["boxes"].to(torch.float32)
-
-            new_targets.append({k: v.to(device) for k, v in new_t.items()})
-
-        targets = new_targets # 修正したターゲットを使用
+        images = list(image.to(device).to(torch.float32) for image in images)
+        targets = [{k: v.to(device).to(torch.float32) if k == 'boxes' else v.to(device) for k, v in t.items()} for t in targets]
 
         # 2. 勾配をゼロクリア
         optimizer.zero_grad()
