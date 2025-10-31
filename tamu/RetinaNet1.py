@@ -29,43 +29,44 @@ class CustomObjectDetectionDataset(Dataset):
     def _parse_pts(self, pts_path):
     
     #.ptsファイルから2点 (左上と右下など) を読み取り、
-    boxes = []
-    labels = []
+    
+        boxes = []
+        labels = []
 
-    if not os.path.exists(pts_path):
-        return np.empty((0, 4), dtype=np.float32), np.empty((0,), dtype=np.int64)
+        if not os.path.exists(pts_path):
+            return np.empty((0, 4), dtype=np.float32), np.empty((0,), dtype=np.int64)
 
-    xs, ys = [], []
-    with open(pts_path, 'r') as f:
-        for line in f:
-            line = line.strip()
+        xs, ys = [], []
+        with open(pts_path, 'r') as f:
+            for line in f:
+                line = line.strip()
             # 空行やヘッダー、波括弧をスキップ
-            if not line or line.startswith("version") or line in ["{", "}"]:
-                continue
+                if not line or line.startswith("version") or line in ["{", "}"]:
+                    continue
 
             # "129 100" のような座標ペアを読む
-            parts = line.split()
-            if len(parts) != 2:
-                continue
+                parts = line.split()
+                if len(parts) != 2:
+                    continue
 
-            try:
-                x, y = float(parts[0]), float(parts[1])
-                xs.append(x)
-                ys.append(y)
-            except ValueError:
-                continue
+                try:
+                    x, y = float(parts[0]), float(parts[1])
+                    xs.append(x)
+                    ys.append(y)
+                except ValueError:
+                    continue
 
-    if len(xs) >= 2 and len(ys) >= 2:
-        xmin, xmax = min(xs), max(xs)
-        ymin, ymax = min(ys), max(ys)
-        boxes = np.array([[xmin, ymin, xmax, ymax]], dtype=np.float32)
-        labels = np.array([1], dtype=np.int64)  # ← 全て同じクラス扱い
-    else:
-        # 点が足りない場合は空にしておく
-        boxes = np.empty((0, 4), dtype=np.float32)
-        labels = np.empty((0,), dtype=np.int64)
+        if len(xs) >= 2 and len(ys) >= 2:
+            xmin, xmax = min(xs), max(xs)
+            ymin, ymax = min(ys), max(ys)
+            boxes = np.array([[xmin, ymin, xmax, ymax]], dtype=np.float32)
+            labels = np.array([1], dtype=np.int64)  # ← 全て同じクラス扱い
+        else:
+            # 点が足りない場合は空にしておく
+            boxes = np.empty((0, 4), dtype=np.float32)
+            labels = np.empty((0,), dtype=np.int64)
 
-    return boxes, labels
+        return boxes, labels
 
         
     def __getitem__(self, idx):
