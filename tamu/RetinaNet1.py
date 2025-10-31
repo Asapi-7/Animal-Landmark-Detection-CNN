@@ -79,8 +79,8 @@ class CustomObjectDetectionDataset(Dataset):
 
         # 3. ターゲット辞書の作成（RetinaNetの要求形式）
         if boxes_np.size == 0:
-            boxes = torch.tensor((0, 4), dtype=torch.float32)
-            labels = torch.tensor((0,), dtype=torch.int64)
+            boxes = torch.empty((0, 4), dtype=torch.float32)
+            labels = torch.empty((0,), dtype=torch.int64)
         else:
             boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
             labels = torch.as_tensor(labels_np, dtype=torch.int64)
@@ -211,7 +211,7 @@ for epoch in range(num_epochs):
     
     for step, (images, targets) in enumerate(train_loader):
         # 1. データとターゲットをGPUに移動
-        images = list(image.to(device).to(torch.float32) for image in images)
+        images = [image.to(device).to(torch.float32) for image in images]
         targets = [{k: v.to(device).to(torch.float32) if k == 'boxes' else v.to(device) for k, v in t.items()} for t in targets]
 
         # 2. 勾配をゼロクリア
