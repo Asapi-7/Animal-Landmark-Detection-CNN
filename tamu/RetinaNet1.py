@@ -232,14 +232,24 @@ for epoch in range(num_epochs):
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         # デバッグ: ターゲットの中身確認
-        for t in targets:
-            print("boxes:", t["boxes"])
-            print("labels:", t["labels"])
+        if step == 0:
+            for t in targets:
+                print("boxes:", t["boxes"])
+                print("labels:", t["labels"])
 
         # ここで損失計算
         loss_dict = model(images, targets)
         losses = sum(loss for loss in loss_dict.values())
         total_epoch_loss += losses.item()
+
+           # NaNチェック
+        if torch.isnan(losses):
+            print(f"⚠️ NaN detected at step {step}, skipping this batch.")
+            continue
+
+    # 最初の5ステップだけ損失の中身を表示
+        if step < 5:
+            print(f"[Step {step}] loss_dict:", {k: f"{v.item():.4f}" for k, v in loss_dict.items()})
 
         # 2. 勾配をゼロクリア
         optimizer.zero_grad()
