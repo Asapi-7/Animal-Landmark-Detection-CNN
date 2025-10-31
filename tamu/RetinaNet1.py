@@ -253,7 +253,7 @@ for epoch in range(num_epochs):
             images_tensor = torch.stack(images) 
             features = model.backbone(images_tensor)
             print("特徴マップの数:", len(features))
-            for i, f in enumerate(features):
+            for i, f in enumerate(features.values()):
                 print(f"  特徴マップ {i}: {f.shape}")
             break
 
