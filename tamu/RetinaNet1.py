@@ -212,7 +212,15 @@ for epoch in range(num_epochs):
     for step, (images, targets) in enumerate(train_loader):
         # 1. データとターゲットをGPUに移動
         images = [image.to(device).to(torch.float32) for image in images]
-        targets = [{k: v.to(device).to(torch.float32) if k == 'boxes' else v.to(device) for k, v in t.items()} for t in targets]
+        targets = [
+            {
+                'boxes': t['boxes'].to(device).to(torch.float32),
+                'labels': t['labels'].to(device).to(torch.int64),
+                'image_id': t['image_id'].to(device).to(torch.int64)
+            }
+            for t in targets
+        ]
+
 
         # 2. 勾配をゼロクリア
         optimizer.zero_grad()
