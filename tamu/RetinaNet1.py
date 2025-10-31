@@ -19,6 +19,7 @@ from torchvision.models.detection import RetinaNet
 from tqdm import tqdm
 
 import torch.optim as optim
+from torchvision.ops import box_iou
 
 # データセット
 class CustomObjectDetectionDataset(Dataset):
@@ -219,6 +220,40 @@ optimizer = optim.SGD(
 # 学習するエポック数
 num_epochs = 10 
 
+from torchvision.ops import box_iou
+
+def evaluate_iou(model, dataloader, device):
+    model.eval()
+    total_iou = 0.0
+    total_images = 0
+
+    with torch.no_grad():
+        for images, targets in tqdm(dataloader, desc="Evaluating IoU"):
+            images = [img.to(device) for img in images]
+            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+            outputs = model(images)
+
+            for output, target in zip(outputs, targets):
+                pred_boxes = output['boxes']
+                true_boxes = target['boxes']
+
+                if pred_boxes.size(0) == 0 or true_boxes.size(0) == 0:
+                    continue  # 空ならスキップ
+
+                ious = box_iou(pred_boxes, true_boxes)  # [N_pred, N_true] のIoU行列
+                max_ious, _ = ious.max(dim=1)  # 各予測に対して最大IoUを取得
+
+                total_iou += max_ious.mean().item()
+                total_images += 1
+
+    if total_images == 0:
+        print("⚠️ IoU評価できる画像がありませんでした。")
+    else:
+        avg_iou = total_iou / total_images
+        print(f"\n📊 平均IoU: {avg_iou:.4f}（{total_images}枚の画像で評価）\n")
+
+
 print(f"学習を {device} で開始します...")
 
 model.train() # モデルをトレーニングモードに設定
@@ -268,3 +303,6 @@ print("全学習プロセスが完了しました。")
 
 # モデルの重みを保存
 torch.save(model.state_dict(), 'retinanet_custom_weights_final.pth')
+
+# 学習後にIoUを評価
+evaluate_iou(model, test_loader, device)
