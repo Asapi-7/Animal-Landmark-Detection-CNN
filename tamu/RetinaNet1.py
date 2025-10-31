@@ -189,7 +189,7 @@ backbone_fpn = _resnet_fpn_extractor(
 
 anchor_generator = AnchorGenerator(
     sizes=((32, 64, 128, 256, 512),),
-    aspect_ratios=((0.5, 1.0, 2.0),)
+    aspect_ratios=((0.5, 1.0, 2.0),) * 6
 )
 
 
