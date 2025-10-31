@@ -79,8 +79,8 @@ class CustomObjectDetectionDataset(Dataset):
 
         # 3. ターゲット辞書の作成（RetinaNetの要求形式）
         if boxes_np.size == 0:
-            boxes = torch.zeros((0, 4), dtype=torch.float32)
-            labels = torch.zeros((0,), dtype=torch.int64)
+            boxes = torch.tensor([], dtype=torch.float32).reshape(0, 4)
+            labels = torch.tensor([], dtype=torch.int64)
         else:
             boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
             labels = torch.as_tensor(labels_np, dtype=torch.int64)
@@ -212,7 +212,17 @@ for epoch in range(num_epochs):
     for step, (images, targets) in enumerate(train_loader):
         # 1. データとターゲットをGPUに移動
         images = list(image.to(device) for image in images)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        new_targets = []
+        for t in targets:
+            new_t = t.copy()
+            
+            # ボックスがfloat型であることを確認（これがAssertionの原因であるため）
+            if new_t["boxes"].dtype != torch.float32:
+                new_t["boxes"] = new_t["boxes"].to(torch.float32)
+
+            new_targets.append({k: v.to(device) for k, v in new_t.items()})
+
+        targets = new_targets # 修正したターゲットを使用
 
         # 2. 勾配をゼロクリア
         optimizer.zero_grad()
