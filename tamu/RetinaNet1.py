@@ -224,6 +224,7 @@ print(f"学習を {device} で開始します...")
 model.train() # モデルをトレーニングモードに設定
 
 for epoch in range(num_epochs):
+    print(f"\nEpoch {epoch+1}/{num_epochs}")
     start_time = time.time()
     total_epoch_loss = 0
     
