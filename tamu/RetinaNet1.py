@@ -157,7 +157,7 @@ test_dataset = CustomObjectDetectionDataset(test_imgs, DATA_ROOT, get_transform(
 # 4. DataLoaderの作成
 train_loader = DataLoader(
     train_dataset,
-    batch_size=32, 
+    batch_size=16, 
     shuffle=True,
     num_workers=2, 
     collate_fn=custom_collate_fn 
@@ -166,7 +166,7 @@ train_loader = DataLoader(
 # ⚠️ テストローダーも作成
 test_loader = DataLoader(
     test_dataset,
-    batch_size=4, 
+    batch_size=2, 
     shuffle=False, # 評価時はシャッフル不要
     num_workers=2, 
     collate_fn=custom_collate_fn 
@@ -232,11 +232,6 @@ for epoch in range(num_epochs):
         images = [image.to(device).to(torch.float32) for image in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        # デバッグ: ターゲットの中身確認
-        if step == 0:
-            for t in targets:
-                print("boxes:", t["boxes"])
-                print("labels:", t["labels"])
 
         # 2. 勾配をゼロクリア
         optimizer.zero_grad()
