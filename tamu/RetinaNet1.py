@@ -16,6 +16,7 @@ from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor
 from torchvision.ops.feature_pyramid_network import LastLevelP6P7 
 from torchvision.models.detection.anchor_utils import AnchorGenerator
 from torchvision.models.detection import RetinaNet
+from tqdm import tqdm
 
 import torch.optim as optim
 
@@ -210,7 +211,7 @@ model.to(device)
 # オプティマイザの定義
 optimizer = optim.SGD(
     model.parameters(), 
-    lr=0.005,
+    lr=0.0001,
     momentum=0.9,
     weight_decay=0.0001
 )
@@ -226,7 +227,7 @@ for epoch in range(num_epochs):
     start_time = time.time()
     total_epoch_loss = 0
     
-    for step, (images, targets) in enumerate(train_loader):
+    for step, (images, targets) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}")):
         # 1. データとターゲットをGPUに移動
         images = [image.to(device).to(torch.float32) for image in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -241,6 +242,9 @@ for epoch in range(num_epochs):
         loss_dict = model(images, targets)
         losses = sum(loss for loss in loss_dict.values())
         total_epoch_loss += losses.item()
+
+        if step < 5:
+            print("loss_dict:", loss_dict)
 
            # NaNチェック
         if torch.isnan(losses):
