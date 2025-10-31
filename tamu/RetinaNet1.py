@@ -13,7 +13,8 @@ from sklearn.model_selection import train_test_split # 👈 追加: データ分
 # モデル構築用
 from resnet50_backbone import resnet50 
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor
-from torchvision.ops.feature_pyramid_network import LastLevelP6P7 # 👈 以前のModuleNotFoundErrorの修正
+from torchvision.ops.feature_pyramid_network import LastLevelP6P7 
+from torchvision.models.detection.anchor_utils import AnchorGenerator
 from torchvision.models.detection import RetinaNet
 
 import torch.optim as optim
@@ -186,13 +187,19 @@ backbone_fpn = _resnet_fpn_extractor(
     extra_blocks=LastLevelP6P7(out_channels, out_channels)
 )
 
+
+anchor_generator = AnchorGenerator(
+    sizes=((32,), (64,), (128,), (256,), (512,)),
+    aspect_ratios=((0.5, 1.0, 2.0),) * 5
+)
+
 # RetinaNetモデルの構築
 NUM_CLASSES = 10 
 
 model = RetinaNet(
     backbone=backbone_fpn,
     num_classes=NUM_CLASSES,
-    weights=None 
+    anchor_generator=anchor_generator
 )
 
 # デバイス設定
