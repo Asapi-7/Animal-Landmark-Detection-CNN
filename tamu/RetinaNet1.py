@@ -79,8 +79,8 @@ class CustomObjectDetectionDataset(Dataset):
 
         # 3. ターゲット辞書の作成（RetinaNetの要求形式）
         if boxes_np.size == 0:
-            boxes = torch.tensor([], dtype=torch.float32).reshape(0, 4)
-            labels = torch.tensor([], dtype=torch.int64)
+            boxes = torch.tensor((0, 4), dtype=torch.float32)
+            labels = torch.tensor((0,), dtype=torch.int64)
         else:
             boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
             labels = torch.as_tensor(labels_np, dtype=torch.int64)
