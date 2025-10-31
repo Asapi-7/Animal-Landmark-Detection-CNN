@@ -157,7 +157,7 @@ test_dataset = CustomObjectDetectionDataset(test_imgs, DATA_ROOT, get_transform(
 # 4. DataLoaderの作成
 train_loader = DataLoader(
     train_dataset,
-    batch_size=64, 
+    batch_size=32, 
     shuffle=True,
     num_workers=2, 
     collate_fn=custom_collate_fn 
@@ -257,10 +257,6 @@ for epoch in range(num_epochs):
 
         # 4. バックワードパス: 勾配を計算
         losses.backward()
-
-    # 最初の5ステップだけ損失の中身を表示
-        if step < 5:
-            print(f"[Step {step}] loss_dict:", {k: f"{v.item():.4f}" for k, v in loss_dict.items()})
 
         # 5. オプティマイザのステップ: 重みを更新
         optimizer.step()
