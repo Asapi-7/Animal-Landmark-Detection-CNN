@@ -158,7 +158,7 @@ test_dataset = CustomObjectDetectionDataset(test_imgs, DATA_ROOT, get_transform(
 # 4. DataLoaderの作成
 train_loader = DataLoader(
     train_dataset,
-    batch_size=4, 
+    batch_size=16, 
     shuffle=True,
     num_workers=2, 
     collate_fn=custom_collate_fn 
