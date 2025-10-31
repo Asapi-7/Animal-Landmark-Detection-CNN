@@ -178,6 +178,9 @@ test_loader = DataLoader(
 # =========================================================
 
 # ResNet50を使えるようにする
+#custom_backbone = resnet50(pretrained=False) 
+
+# ResNet18を使えるようにする
 custom_backbone = resnet50(pretrained=False) 
 
 # FPNを構築するための設定
