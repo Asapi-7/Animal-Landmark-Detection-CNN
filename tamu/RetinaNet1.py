@@ -11,7 +11,8 @@ import glob # 👈 追加: ファイルパスのリスト取得用
 from sklearn.model_selection import train_test_split # 👈 追加: データ分割用
 
 # モデル構築用
-from resnet50_backbone import resnet50 
+#from resnet50_backbone import resnet50 
+from resnet50_backbone import resnet18
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor
 from torchvision.ops.feature_pyramid_network import LastLevelP6P7 
 from torchvision.models.detection.anchor_utils import AnchorGenerator
