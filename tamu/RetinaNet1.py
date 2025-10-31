@@ -187,11 +187,12 @@ backbone_fpn = _resnet_fpn_extractor(
     extra_blocks=LastLevelP6P7(out_channels, out_channels)
 )
 
-
 anchor_generator = AnchorGenerator(
-    sizes=((32,), (64,), (128,), (256,), (512,)),
-    aspect_ratios=((0.5, 1.0, 2.0),) * 5
+    sizes=((32, 64, 128, 256, 512),),
+    aspect_ratios=((0.5, 1.0, 2.0),)
 )
+
+
 
 # RetinaNetモデルの構築
 NUM_CLASSES = 10 
