@@ -240,8 +240,7 @@ for epoch in range(num_epochs):
 
         # 2. 勾配をゼロクリア
         optimizer.zero_grad()
-        # 4. バックワードパス: 勾配を計算
-        losses.backward()
+        
 
         # ここで損失計算
         loss_dict = model(images, targets)
@@ -255,6 +254,9 @@ for epoch in range(num_epochs):
         if torch.isnan(losses):
             print(f"⚠️ NaN detected at step {step}, skipping this batch.")
             continue
+
+        # 4. バックワードパス: 勾配を計算
+        losses.backward()
 
     # 最初の5ステップだけ損失の中身を表示
         if step < 5:
