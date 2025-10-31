@@ -257,11 +257,10 @@ print(f"学習を {device} で開始します...")
 model.train() # モデルをトレーニングモードに設定
 
 for epoch in range(num_epochs):
-    print(f"\nEpoch {epoch+1}/{num_epochs}")
     start_time = time.time()
     total_epoch_loss = 0
     
-    for step, (images, targets) in enumerate(train_loader):
+    for step, (images, targets) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}")):
         # 1. データとターゲットをGPUに移動
         images = [image.to(device).to(torch.float32) for image in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -287,10 +286,6 @@ for epoch in range(num_epochs):
         # 5. オプティマイザのステップ: 重みを更新
         optimizer.step()
         
-        # ログ出力
-        if step % 50 == 0:
-            print(f"  Epoch: {epoch+1}/{num_epochs}, Step: {step}, Total Loss: {losses.item():.4f}, Cls Loss: {loss_dict['classification'].item():.4f}")
-    
     end_time = time.time()
     print(f"\n--- Epoch {epoch+1} 完了。 平均損失: {total_epoch_loss / len(train_loader):.4f}, 処理時間: {(end_time - start_time):.2f}s ---\n")
 
