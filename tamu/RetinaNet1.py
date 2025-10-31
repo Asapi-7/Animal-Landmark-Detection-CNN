@@ -229,34 +229,20 @@ for epoch in range(num_epochs):
     for step, (images, targets) in enumerate(train_loader):
         # 1. データとターゲットをGPUに移動
         images = [image.to(device).to(torch.float32) for image in images]
-        targets = [
-            {
-                'boxes': t['boxes'].to(device).to(torch.float32),
-                'labels': t['labels'].to(device).to(torch.int64),
-                'image_id': t['image_id'].to(device).to(torch.int64)
-            }
-            for t in targets
-        ]
+        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
+        # デバッグ: ターゲットの中身確認
+        for t in targets:
+            print("boxes:", t["boxes"])
+            print("labels:", t["labels"])
+
+        # ここで損失計算
+        loss_dict = model(images, targets)
+        losses = sum(loss for loss in loss_dict.values())
+        total_epoch_loss += losses.item()
 
         # 2. 勾配をゼロクリア
         optimizer.zero_grad()
-
-        for t in targets:
-            print("boxes:", t["boxes"].shape, type(t["boxes"]))
-            print("labels:", t["labels"].shape, type(t["labels"]))
-            print(t["boxes"])
-            print("---")
-
-        # FPN出力の特徴マップ数を確認
-        with torch.no_grad():
-            images_tensor = torch.stack(images) 
-            features = model.backbone(images_tensor)
-            print("特徴マップの数:", len(features))
-            for i, f in enumerate(features.values()):
-                print(f"  特徴マップ {i}: {f.shape}")
-            break
-
 
         # 3. フォワードパス: 損失を計算
         loss_dict = model(images, targets) 
