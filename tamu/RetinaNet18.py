@@ -236,10 +236,10 @@ def evaluate_iou(model, dataloader, device):
                 total_images += 1
 
     if total_images == 0:
-        print("⚠️ IoU評価できる画像がありませんでした。")
+        print(" IoU評価できる画像がありませんでした。")
     else: # 平均IoUの出力
         avg_iou = total_iou / total_images
-        print(f"\n📊 平均IoU: {avg_iou:.4f}（{total_images}枚の画像で評価）\n")
+        print(f"\n 平均IoU: {avg_iou:.4f}（{total_images}枚の画像で評価）\n")
 
 # モデルを学習させる
 model.train() # トレーニングモード
