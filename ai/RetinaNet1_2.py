@@ -189,15 +189,37 @@ backbone_fpn = _resnet_fpn_extractor(
     extra_blocks=LastLevelP6P7(out_channels, out_channels)
 )
 
+# =========================================================
+# 1️⃣ FPN 出力層数を確認して AnchorGenerator を自動設定
+# =========================================================
+
+
+# ダミー画像を作成（バッチサイズ1、3チャンネル、224x224）
+dummy_images = [torch.rand(3, 224, 224)]
+
+# FPN に通して出力を確認
+features = backbone_fpn(dummy_images)
+print("FPN 出力層のキー:", list(features.keys()))
+num_feature_maps = len(features)
+print("FPN 出力層数:", num_feature_maps)
+
+# AnchorGenerator を出力層数に合わせて作成
+# サイズは小さい順に適当に設定（必要に応じて調整可）
+base_sizes = [32, 64, 128, 256, 512]  # 最大5層まで
+# 実際の層数に合わせてスライス
+sizes_for_anchor = tuple((s,) for s in base_sizes[:num_feature_maps])
+
 anchor_generator = AnchorGenerator(
-    sizes=((32,), (64,), (128,), (256,), (512,)),
-    aspect_ratios=((0.5, 1.0, 2.0),) * 5
+    sizes=sizes_for_anchor,
+    aspect_ratios=((0.5, 1.0, 2.0),) * num_feature_maps
 )
+
+print("AnchorGenerator 設定:", anchor_generator)
 
 
 
 # RetinaNetモデルの構築
-NUM_CLASSES = 2
+NUM_CLASSES = 1
 
 model = RetinaNet(
     backbone=backbone_fpn,
