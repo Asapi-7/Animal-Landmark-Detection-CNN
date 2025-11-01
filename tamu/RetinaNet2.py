@@ -7,8 +7,8 @@ from torch.utils.data import Dataset
 from torchvision.transforms import functional as F
 from torchvision import transforms as T
 from torch.utils.data import DataLoader
-import glob # 👈 追加: ファイルパスのリスト取得用
-from sklearn.model_selection import train_test_split # 👈 追加: データ分割用
+import glob # ファイルパスのリスト取得用
+from sklearn.model_selection import train_test_split # データ分割用
 
 # モデル構築用
 from resnet50_backbone import resnet50 
@@ -23,7 +23,7 @@ from torchvision.ops import box_iou
 
 # データセット
 class CustomObjectDetectionDataset(Dataset):
-    # ⚠️ __init__を修正: rootではなく、画像パスのリストを受け取る
+    # 画像パスのリストを受け取る
     def __init__(self, img_list, root, transforms=None):
         self.root = root # .ptsファイルを見つけるためにrootを保持
         self.transforms = transforms
@@ -197,7 +197,7 @@ anchor_generator = AnchorGenerator(
 
 
 # RetinaNetモデルの構築
-NUM_CLASSES = 10 
+NUM_CLASSES = 2 # 区別する対象は背景と物体の2つ
 
 model = RetinaNet(
     backbone=backbone_fpn,
