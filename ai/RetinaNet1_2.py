@@ -189,24 +189,25 @@ backbone_fpn = _resnet_fpn_extractor(
     extra_blocks=LastLevelP6P7(out_channels, out_channels)
 )
 
+
 # =========================================================
 # 1️⃣ FPN 出力層数を確認して AnchorGenerator を自動設定
 # =========================================================
 
+# ダミー画像をFPNに通して出力層の構造を確認
+with torch.no_grad():
+    dummy_image = torch.rand(1, 3, 224, 224)  # バッチサイズ1
+    features = backbone_fpn(dummy_image)
+    print("FPN 出力層のキー:", list(features.keys()))
+    print("各層の出力形状:")
+    for k, v in features.items():
+        print(f"  {k}: {tuple(v.shape)}")
 
-# ダミー画像を作成（バッチサイズ1、3チャンネル、224x224）
-dummy_images = [torch.rand(3, 224, 224)]
-
-# FPN に通して出力を確認
-features = backbone_fpn(dummy_images)
-print("FPN 出力層のキー:", list(features.keys()))
 num_feature_maps = len(features)
 print("FPN 出力層数:", num_feature_maps)
 
 # AnchorGenerator を出力層数に合わせて作成
-# サイズは小さい順に適当に設定（必要に応じて調整可）
 base_sizes = [32, 64, 128, 256, 512]  # 最大5層まで
-# 実際の層数に合わせてスライス
 sizes_for_anchor = tuple((s,) for s in base_sizes[:num_feature_maps])
 
 anchor_generator = AnchorGenerator(
@@ -217,9 +218,8 @@ anchor_generator = AnchorGenerator(
 print("AnchorGenerator 設定:", anchor_generator)
 
 
-
 # RetinaNetモデルの構築
-NUM_CLASSES = 1
+NUM_CLASSES = 2
 
 model = RetinaNet(
     backbone=backbone_fpn,
@@ -237,7 +237,7 @@ model.to(device)
 # オプティマイザ
 optimizer = optim.SGD(
     model.parameters(), 
-    lr=0.0001,
+    lr=0.001,
     momentum=0.9,
     weight_decay=0.001
 )
@@ -292,8 +292,7 @@ def evaluate_retinanet(model, dataloader, device, iou_threshold=0.5):
 
                 # --- 平均IoU (Recallが成功したものを基準) ---
                 if correct_recall > 0:
-                    total_iou_sum += max_iou_per_true_box[max_iou_per_true_box >= iou_threshold].mean().item()
-
+                    total_iou_sum += max_iou_per_true_box[max_iou_per_true_box >= iou_threshold].sum().item() 
 
     # --- 最終的な指標の計算 ---
     if total_ground_truth_boxes == 0:
