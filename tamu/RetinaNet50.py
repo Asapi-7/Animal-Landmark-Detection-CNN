@@ -200,7 +200,7 @@ model.to(device)
 # オプティマイザの定義 (SGD：確率的勾配降下法)
 optimizer = optim.SGD(
     model.parameters(), 
-    lr=0.0001, # 学習率
+    lr=0.001, # 学習率
     momentum=0.9,
     weight_decay=0.0001 # 過学習防止
 )

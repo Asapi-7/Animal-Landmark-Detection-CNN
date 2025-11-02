@@ -14,7 +14,7 @@ from torchvision import transforms as T # 画像変換(Tensorに)
 from torchvision.ops import box_iou # IoUの計算(IoU：)
 
 # モデル構築用
-from resnet18_backbone import resnet18 # ResNet18のバックボーン
+from resnet50_backbone import resnet50 # ResNet50のバックボーン
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor # ResNetからFPNを構築
 from torchvision.ops.feature_pyramid_network import LastLevelP6P7 # FPNの最終レベル(P6,P7)を追加する
 from torchvision.models.detection.anchor_utils import AnchorGenerator # RetinaNetのアンカー生成器
@@ -116,8 +116,10 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
 def get_transform(train):
     t = [T.ToTensor()] # PIL画像をテンソル形式に変換
     if train: # データ拡張
-        # t.append(T.RandomHorizontalFlip(0.5)) # 50%の確率で左右反転
-        pass 
+        t.append(T.RandomHorizontalFlip(0.5)) # 50%の確率で左右反転
+        t.append(T.RandomRotation(degrees=15))  # 回転
+        t.append(T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2))  # 色調変化
+        t.append(T.RandomResizedCrop(size=(224, 224), scale=(0.8, 1.0)))  # ランダムクロップ
     return T.ToTensor()
 
 # コレート関数(Collate Function)の定義 (RetinaNetにはリスト形式で渡すため)
@@ -166,7 +168,7 @@ test_loader = DataLoader(
 
 
 # バックボーンとアンカー生成器の構築
-custom_backbone = resnet18(pretrained=False) # ResNet18を使えるようにする (重みなし)
+custom_backbone = resnet50(pretrained=False) # ResNet50を使えるようにする (重みなし)
 
 # FPNを構築するための設定
 out_channels = 256 # FPNの各出力マップのチャンネル数

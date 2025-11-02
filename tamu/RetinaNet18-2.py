@@ -116,8 +116,10 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
 def get_transform(train):
     t = [T.ToTensor()] # PIL画像をテンソル形式に変換
     if train: # データ拡張
-        # t.append(T.RandomHorizontalFlip(0.5)) # 50%の確率で左右反転
-        pass 
+        t.append(T.RandomHorizontalFlip(0.5)) # 50%の確率で左右反転
+        t.append(T.RandomRotation(degrees=15))  # 回転
+        t.append(T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2))  # 色調変化
+        t.append(T.RandomResizedCrop(size=(224, 224), scale=(0.8, 1.0)))  # ランダムクロップ
     return T.ToTensor()
 
 # コレート関数(Collate Function)の定義 (RetinaNetにはリスト形式で渡すため)
