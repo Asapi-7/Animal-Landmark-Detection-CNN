@@ -364,15 +364,17 @@ for epoch in range(num_epochs):
     print(f"\n=== Epoch {epoch+1}/{num_epochs} ===")
     model.train()
     total_epoch_loss = 0.0
+    total_cls_loss = 0.0
+    total_box_loss = 0.0
+    total_batches = 0
 
-    for step, (images, targets) in enumerate(tqdm(train_loader, desc="Training")):
+    for step, (images, targets) in enumerate(tqdm(train_loader, desc=f"Training Epoch {epoch+1}")):
         images = [img.to(device).to(torch.float32) for img in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         optimizer.zero_grad()
         loss_dict = model(images, targets)
         losses = sum(loss for loss in loss_dict.values())
-        total_epoch_loss += losses.item()
 
         # NaNチェック
         if torch.isnan(losses):
@@ -382,12 +384,27 @@ for epoch in range(num_epochs):
         losses.backward()
         optimizer.step()
 
-    print(f"--- Epoch {epoch+1} 完了: 平均損失 {total_epoch_loss/len(train_loader):.4f} ---")
+        # 各損失を累積
+        total_epoch_loss += losses.item()
+        total_cls_loss += loss_dict['classification'].item()
+        total_box_loss += loss_dict['bbox_regression'].item()
+        total_batches += 1
 
+    # === エポックごとの平均損失 ===
+    avg_total_loss = total_epoch_loss / total_batches
+    avg_cls_loss = total_cls_loss / total_batches
+    avg_box_loss = total_box_loss / total_batches
+
+    print(f"--- Epoch {epoch+1} 完了 ---")
+    print(f"平均 Total Loss: {avg_total_loss:.4f}, "
+          f"Cls Loss: {avg_cls_loss:.4f}, "
+          f"Box Loss: {avg_box_loss:.4f}")
+
+    # === テスト損失の計算 ===
     test_loss = compute_test_loss(model, test_loader, device)
     test_losses.append(test_loss)
 
-    # 5エポックごとに評価
+    # === 5エポックごとに評価・保存 ===
     if (epoch + 1) % 5 == 0:
         print(f"\n--- 評価 (Epoch {epoch+1}) ---")
         evaluate_retinanet_single_prediction(model, test_loader, device, iou_threshold=0.5)
