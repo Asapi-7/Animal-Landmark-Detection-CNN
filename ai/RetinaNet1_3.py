@@ -326,38 +326,31 @@ def evaluate_retinanet_single_prediction(model, dataloader, device, iou_threshol
 # ==========================================================
 # ✅ test loss 計算関数
 # ==========================================================
-def compute_test_loss(model, dataloader, device):
-    model.eval()  # eval() にする
-    total_loss, num_batches = 0.0, 0
-    with torch.no_grad():
-        for images, targets in tqdm(dataloader, desc="Computing Test Loss"):
-            images = [img.to(device).to(torch.float32) for img in images]
+def compute_test_loss(model, test_loader, device):
+    model.train()  # ← eval()ではなくtrain()（損失を返してもらうため）
+    total_loss = 0
+    count = 0
+
+    with torch.no_grad():  # ← 勾配を計算しない
+        for images, targets in test_loader:
+            images = [img.to(device) for img in images]
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-            
-            # 推論モード
-            output = model(images, targets)
-            
-            # dictかlistかで処理を分ける
-            if isinstance(output, dict):
-                losses = sum(v for v in output.values())
-            elif isinstance(output, list):
-                # list の場合は各要素が dict になっている場合があるので sum する
-                losses = sum(sum(v for v in o.values()) if isinstance(o, dict) else o for o in output)
-            else:
-                raise TypeError(f"Unexpected output type: {type(output)}")
 
-            total_loss += losses.item()
-            num_batches += 1
+            # 損失を取得
+            loss_dict = model(images, targets)
+            loss = sum(loss for loss in loss_dict.values())
 
-    avg_loss = total_loss / num_batches
-    print(f"Test Loss: {avg_loss:.4f}")
+            total_loss += loss.item()
+            count += 1
+
+    avg_loss = total_loss / count if count > 0 else 0
     return avg_loss
 
 
 # ==========================================================
 # 学習ループ
 # ==========================================================
-num_epochs = 10
+num_epochs = 20
 test_losses = []
 
 for epoch in range(num_epochs):
