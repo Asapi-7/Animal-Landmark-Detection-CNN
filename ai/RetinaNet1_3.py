@@ -243,15 +243,15 @@ optimizer = optim.SGD(
 )
 
 # 評価関数
-def evaluate_retinanet_single_prediction(model, dataloader, device, iou_threshold=0.5):
+def evaluate_retinanet(model, dataloader, device, iou_threshold=0.5):
     """
-    各画像の予測を 1 つだけに制限して評価する関数
+    1画像につき予測を1つだけに制限して評価
+    正解ボックスも1つだけの想定
     """
     model.eval()
     
     total_ground_truth_boxes = 0
     total_pred_boxes = 0
-    
     total_correct_detections_for_recall = 0
     total_correct_detections_for_precision = 0
     total_iou_sum = 0.0
@@ -265,17 +265,16 @@ def evaluate_retinanet_single_prediction(model, dataloader, device, iou_threshol
 
             for output, target in zip(outputs, targets):
                 pred_boxes = output['boxes']
-                scores = output['scores']  # スコアを取得
+                scores = output['scores']  # スコアも取得
+                true_boxes = target['boxes']
 
                 # --- 予測を1つだけに制限 ---
                 if pred_boxes.size(0) > 0:
                     max_idx = scores.argmax()
                     pred_boxes = pred_boxes[max_idx].unsqueeze(0)  # [1,4]
 
-                true_boxes = target['boxes']
-
                 total_pred_boxes += pred_boxes.size(0)
-                
+
                 if true_boxes.size(0) == 0:
                     continue  # 正解BOXがない場合はスキップ
 
@@ -284,90 +283,50 @@ def evaluate_retinanet_single_prediction(model, dataloader, device, iou_threshol
                 if pred_boxes.size(0) == 0:
                     continue  # 予測BOXがない場合はスキップ
 
-                ious = box_iou(pred_boxes, true_boxes)  # [N_pred=1, N_true]
+                ious = box_iou(pred_boxes, true_boxes)  # [1,1] の想定
 
-                # --- Recall 計算 (正解BOX基準) ---
-                max_iou_per_true_box, _ = ious.max(dim=0)
-                correct_recall = (max_iou_per_true_box >= iou_threshold).sum().item()
-                total_correct_detections_for_recall += correct_recall
+                # Recall (正解BOX基準)
+                if ious.max() >= iou_threshold:
+                    total_correct_detections_for_recall += 1
+                    total_iou_sum += ious.max().item()
 
-                # --- Precision 計算 (予測BOX基準) ---
-                max_iou_per_pred_box, _ = ious.max(dim=1)
-                correct_precision = (max_iou_per_pred_box >= iou_threshold).sum().item()
-                total_correct_detections_for_precision += correct_precision
+                # Precision (予測BOX基準)
+                if ious.max() >= iou_threshold:
+                    total_correct_detections_for_precision += 1
 
-                # --- 平均IoU ---
-                if correct_recall > 0:
-                    total_iou_sum += max_iou_per_true_box[max_iou_per_true_box >= iou_threshold].sum().item()
-
-    # --- 指標計算 ---
-    if total_ground_truth_boxes == 0:
-        print("⚠️ 評価可能な正解BOXがありませんでした")
-        return 0.0, 0.0, 0.0
-    
-    recall = total_correct_detections_for_recall / total_ground_truth_boxes * 100.0
-    
-    precision = 0.0
-    if total_pred_boxes > 0:
-        precision = total_correct_detections_for_precision / total_pred_boxes * 100.0
-    
-    avg_iou = 0.0
-    if total_correct_detections_for_recall > 0:
-        avg_iou = total_iou_sum / total_correct_detections_for_recall
+    # 指標計算
+    recall = (total_correct_detections_for_recall / total_ground_truth_boxes * 100.0
+              if total_ground_truth_boxes > 0 else 0.0)
+    precision = (total_correct_detections_for_precision / total_pred_boxes * 100.0
+                 if total_pred_boxes > 0 else 0.0)
+    avg_iou = (total_iou_sum / total_correct_detections_for_recall
+               if total_correct_detections_for_recall > 0 else 0.0)
 
     print(f"\n--- 評価結果 (1予測/画像) ---")
-    print(f"Recall (IoU > {iou_threshold}): {recall:.2f}%  ({total_correct_detections_for_recall} / {total_ground_truth_boxes})")
-    print(f"Precision (IoU > {iou_threshold}): {precision:.2f}%  ({total_correct_detections_for_precision} / {total_pred_boxes})")
-    print(f"Average IoU (of correct detections): {avg_iou:.4f}")
-    
+    print(f"Recall (IoU > {iou_threshold}): {recall:.2f}% ({total_correct_detections_for_recall}/{total_ground_truth_boxes})")
+    print(f"Precision (IoU > {iou_threshold}): {precision:.2f}% ({total_correct_detections_for_precision}/{total_pred_boxes})")
+    print(f"Average IoU: {avg_iou:.4f}")
+
     return avg_iou, recall, precision
-
-
-# ==========================================================
-# ✅ test loss 計算関数
-# ==========================================================
-def compute_test_loss(model, test_loader, device):
-    model.train()  # ← eval()ではなくtrain()（損失を返してもらうため）
-    total_loss = 0
-    count = 0
-
-    with torch.no_grad():  # ← 勾配を計算しない
-        for images, targets in test_loader:
-            images = [img.to(device) for img in images]
-            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
-            # 損失を取得
-            loss_dict = model(images, targets)
-            loss = sum(loss for loss in loss_dict.values())
-
-            total_loss += loss.item()
-            count += 1
-
-    avg_loss = total_loss / count if count > 0 else 0
-    return avg_loss
-
 
 # ==========================================================
 # 学習ループ
 # ==========================================================
 num_epochs = 20
-test_losses = []
 
 for epoch in range(num_epochs):
     print(f"\n=== Epoch {epoch+1}/{num_epochs} ===")
     model.train()
     total_epoch_loss = 0.0
-    total_cls_loss = 0.0
-    total_box_loss = 0.0
-    total_batches = 0
 
-    for step, (images, targets) in enumerate(tqdm(train_loader, desc=f"Training Epoch {epoch+1}")):
+    for step, (images, targets) in enumerate(tqdm(train_loader, desc="Training")):
         images = [img.to(device).to(torch.float32) for img in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         optimizer.zero_grad()
         loss_dict = model(images, targets)
         losses = sum(loss for loss in loss_dict.values())
+        total_epoch_loss += losses.item()
 
         # NaNチェック
         if torch.isnan(losses):
@@ -377,30 +336,18 @@ for epoch in range(num_epochs):
         losses.backward()
         optimizer.step()
 
-        # 各損失を累積
-        total_epoch_loss += losses.item()
-        total_cls_loss += loss_dict['classification'].item()
-        total_box_loss += loss_dict['bbox_regression'].item()
-        total_batches += 1
+        # ログ
+        if step % 50 == 0:
+            print(f"Step {step}, Total Loss: {losses.item():.4f}, "
+                  f"Cls Loss: {loss_dict['classification'].item():.4f}, "
+                  f"Box Loss: {loss_dict['bbox_regression'].item():.4f}")
 
-    # === エポックごとの平均損失 ===
-    avg_total_loss = total_epoch_loss / total_batches
-    avg_cls_loss = total_cls_loss / total_batches
-    avg_box_loss = total_box_loss / total_batches
+    print(f"--- Epoch {epoch+1} 完了: 平均損失 {total_epoch_loss/len(train_loader):.4f} ---")
 
-    print(f"--- Epoch {epoch+1} 完了 ---")
-    print(f"平均 Total Loss: {avg_total_loss:.4f}, "
-          f"Cls Loss: {avg_cls_loss:.4f}, "
-          f"Box Loss: {avg_box_loss:.4f}")
-
-    # === テスト損失の計算 ===
-    test_loss = compute_test_loss(model, test_loader, device)
-    test_losses.append(test_loss)
-
-    # === 5エポックごとに評価・保存 ===
+    # 10エポックごとに評価
     if (epoch + 1) % 5 == 0:
         print(f"\n--- 評価 (Epoch {epoch+1}) ---")
-        evaluate_retinanet_single_prediction(model, test_loader, device, iou_threshold=0.5)
+        evaluate_retinanet(model, test_loader, device, iou_threshold=0.5)
         torch.save(model.state_dict(), f"retinanet_epoch{epoch+1}.pth")
         print(f"Checkpoint saved: retinanet_epoch{epoch+1}.pth")
 
@@ -409,4 +356,4 @@ for epoch in range(num_epochs):
 # ==========================================================
 torch.save(model.state_dict(), 'retinanet_custom_weights_final.pth')
 print("\n--- 最終評価 ---")
-evaluate_retinanet_single_prediction(model, test_loader, device, iou_threshold=0.5)
+evaluate_retinanet(model, test_loader, device, iou_threshold=0.5)
