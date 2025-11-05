@@ -196,7 +196,7 @@ class CustomFPN(nn.Module):
             x = F.interpolate(x, scale_factor=2, mode='nearest') + lateral_feats[i]
             results.insert(0, self.output_convs[i](x))  # P4, P3
 
-        return results  # [P3, P4, P5]
+        return {str(i): f for i, f in enumerate(features)} # 辞書型で返す
     
 # ResnetとFPNをくっつける
 class BackboneWithFPN(nn.Module):
@@ -204,6 +204,7 @@ class BackboneWithFPN(nn.Module):
         super().__init__()
         self.body = resnet
         self.fpn = fpn
+        self.out_channels = out_channels
 
     def forward(self, x):
         c3, c4, c5 = self.body(x)  # 自作ResNetが中間特徴を返すように設計
@@ -213,7 +214,7 @@ class BackboneWithFPN(nn.Module):
 
 fpn = CustomFPN(in_channels_list=[128, 256, 512], out_channels=256) #自作FPN
 
-backbone = BackboneWithFPN(custom_backbone, fpn) # ResNet + FPN を統合
+backbone = BackboneWithFPN(custom_backbone, fpn,out_channels=256) # ResNet + FPN を統合
 
 """"
 torchvisionの内部関数
