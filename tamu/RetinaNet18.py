@@ -19,6 +19,8 @@ from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor # 
 from torchvision.ops.feature_pyramid_network import LastLevelP6P7 # FPNの最終レベル(P6,P7)を追加する
 from torchvision.models.detection.anchor_utils import AnchorGenerator # RetinaNetのアンカー生成器
 from torchvision.models.detection import RetinaNet # RetinaNetモデル
+import torch.nn as nn
+import torch.nn.functional as F
 
 # データ
 from sklearn.model_selection import train_test_split # データ分割用
@@ -171,11 +173,57 @@ custom_backbone = resnet18(pretrained=False) # ResNet18を使えるようにす�
 # FPNを構築するための設定
 out_channels = 256 # FPNの各出力マップのチャンネル数
 
+# FPNの作成
+class CustomFPN(nn.Module):
+    def __init__(self, in_channels_list, out_channels):
+        super().__init__()
+        self.lateral_convs = nn.ModuleList([
+            nn.Conv2d(in_ch, out_channels, kernel_size=1)
+            for in_ch in in_channels_list
+        ])
+        self.output_convs = nn.ModuleList([
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+            for _ in in_channels_list
+        ])
+
+    def forward(self, inputs):  # inputs = [C3, C4, C5]
+        lateral_feats = [lateral(x) for lateral, x in zip(self.lateral_convs, inputs)]
+        results = []
+        x = lateral_feats[-1]
+        results.append(self.output_convs[-1](x))  # P5
+
+        for i in reversed(range(len(lateral_feats) - 1)):
+            x = F.interpolate(x, scale_factor=2, mode='nearest') + lateral_feats[i]
+            results.insert(0, self.output_convs[i](x))  # P4, P3
+
+        return {str(i): f for i, f in enumerate(features)} # 辞書型で返す
+    
+# ResnetとFPNをくっつける
+class BackboneWithFPN(nn.Module):
+    def __init__(self, resnet, fpn,out_channels):
+        super().__init__()
+        self.body = resnet
+        self.fpn = fpn
+        self.out_channels = out_channels
+
+    def forward(self, x):
+        c3, c4, c5 = self.body(x)  # 自作ResNetが中間特徴を返すように設計
+        return self.fpn([c3, c4, c5])
+
+
+
+fpn = CustomFPN(in_channels_list=[128, 256, 512], out_channels=256) #自作FPN
+
+backbone = BackboneWithFPN(custom_backbone, fpn,out_channels=256) # ResNet + FPN を統合
+
+""""
+torchvisionの内部関数
 backbone_fpn = _resnet_fpn_extractor(
     custom_backbone, 
     trainable_layers=5, # ResNetのすべての層を学習可能に
     extra_blocks=LastLevelP6P7(out_channels, out_channels) # さらに高レベルの特徴マップ(P6,P7)を追加
 )
+"""
 
 # アンカー生成器の定義 (候補領域の作成)
 anchor_generator = AnchorGenerator(
@@ -188,7 +236,7 @@ anchor_generator = AnchorGenerator(
 NUM_CLASSES = 1 # 検出対象(背景を除く)
 
 model = RetinaNet(
-    backbone=backbone_fpn,
+    backbone=backbone,
     num_classes=NUM_CLASSES,
     anchor_generator=anchor_generator
 )
