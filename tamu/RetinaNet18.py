@@ -200,7 +200,7 @@ class CustomFPN(nn.Module):
     
 # ResnetとFPNをくっつける
 class BackboneWithFPN(nn.Module):
-    def __init__(self, resnet, fpn):
+    def __init__(self, resnet, fpn,out_channels):
         super().__init__()
         self.body = resnet
         self.fpn = fpn
