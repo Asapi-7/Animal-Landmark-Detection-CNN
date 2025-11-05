@@ -235,7 +235,7 @@ anchor_generator = AnchorGenerator(
 NUM_CLASSES = 1 # 検出対象(背景を除く)
 
 model = RetinaNet(
-    backbone=backbone_fpn,
+    backbone=backbone,
     num_classes=NUM_CLASSES,
     anchor_generator=anchor_generator
 )
