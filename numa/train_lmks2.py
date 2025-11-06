@@ -210,7 +210,7 @@ class LandmarkRegressor(nn.Module):
         self.regressor_head = nn.Sequential(
             nn.Linear(num_features, HIDDEN_DIM),
             nn.ReLU(inplace=True),
-            nn.Dropout(p=DROPOUT_RATE),
+            #nn.Dropout(p=DROPOUT_RATE),11/6 1:あり
             nn.Linear(HIDDEN_DIM, output_dim)
         )
         
@@ -456,9 +456,9 @@ def train_model():
     # --- パラメータ設定 ---
     DATA_DIR = "./cropped_dataset" # 訓練データセットのパス
     TEST_SIZE = 0.2 # テストデータの割合 (20%)
-    BATCH_SIZE = 32
+    BATCH_SIZE = 64 # 11/6 1: 32とする
     NUM_LANDMARKS = 9
-    NUM_EPOCHS = 20
+    NUM_EPOCHS = 32 # 11/6 1: 20とする
     LEARNING_RATE = 0.001
     
     # --- デバイス設定 ---
