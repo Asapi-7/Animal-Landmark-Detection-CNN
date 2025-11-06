@@ -210,7 +210,7 @@ class LandmarkRegressor(nn.Module):
         self.regressor_head = nn.Sequential(
             nn.Linear(num_features, HIDDEN_DIM),
             nn.ReLU(inplace=True),
-            #nn.Dropout(p=DROPOUT_RATE),11/6 1:あり
+            nn.Dropout(p=DROPOUT_RATE),
             nn.Linear(HIDDEN_DIM, output_dim)
         )
         
