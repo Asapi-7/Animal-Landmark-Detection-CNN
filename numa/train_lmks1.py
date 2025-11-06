@@ -1,5 +1,5 @@
 # =================================================================
-# 0. 必要なライブラリのインポート
+# 0. 必要なライブラリのインポート aaaaaa
 # =================================================================
 import os
 import torch
@@ -19,7 +19,8 @@ IMG_SIZE = 224
 # 1. ランドマーク座標 (.pts) の読み込み関数
 # =================================================================
 def load_landmarks_from_pts_to_tensor(pts_path):
-    """ .ptsファイルから9点のランドマーク座標を読み込み、平坦化されたTensor [18] で返す """
+    # .ptsファイルを読み込みテンソル形式に変換
+    
     points = []
     with open(pts_path, 'r') as f:
         lines = f.readlines()
@@ -48,6 +49,7 @@ def load_landmarks_from_pts_to_tensor(pts_path):
 # 2. PyTorch Dataset クラス
 # =================================================================
 class LandmarkDataset(Dataset):
+    # 訓練に合わせたデータセットを供給する
     # ファイルパスのリストを外部から受け取るよう修正 (train/test分割に必要)
     def __init__(self, file_paths):
         self.image_files = file_paths
@@ -139,7 +141,7 @@ class ResNet18(nn.Module):
     # ... (ResNet18定義は変更なし)
     '''
     ResNet18モデル
-    num_classes: 分類対象の物体クラス数 (ランドマーク回帰用に置き換えられる)
+    num_classes: ランドマーク回帰用
     '''
     def __init__(self, num_classes: int):
         super().__init__()
