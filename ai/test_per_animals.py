@@ -45,7 +45,7 @@ backbone_fpn = _resnet_fpn_extractor(
 
 # AnchorGenerator設定（学習時と同じ）
 base_sizes = [8, 16, 32, 64, 128, 256]
-sizes_for_anchor = tuple((s,) for s in base_sizes[:5])
+sizes_for_anchor = tuple((s,) for s in base_sizes)
 anchor_generator = AnchorGenerator(
     sizes=sizes_for_anchor,
     aspect_ratios=((0.5, 1.0, 2.0),) * len(sizes_for_anchor)
