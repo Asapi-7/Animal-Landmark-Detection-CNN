@@ -115,6 +115,6 @@ def visualize_predictions(img, boxes, scores, labels):
 # ==========================
 # 実行例
 # ==========================
-test_image_path = "./dataset/kangaroo_51"
+test_image_path = "./dataset/kangaroo_51.jpg"
 img, boxes, scores, labels = run_inference(model, test_image_path, threshold=0.1, resize_to=None)
 visualize_predictions(img, boxes, scores, labels)
