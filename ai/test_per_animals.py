@@ -10,14 +10,14 @@ from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor
 from torchvision.models.detection.anchor_utils import AnchorGenerator
 from torchvision.ops.feature_pyramid_network import LastLevelP6P7 
 from torchvision.models.detection import RetinaNet
-from your_dataset_file import CustomObjectDetectionDataset, custom_collate_fn  # 👈 あなたの定義を使う
+from RetinaNet1_3_test import CustomObjectDetectionDataset, custom_collate_fn  # 👈 あなたの定義を使う
 
 # ==========================================================
 # 準備
 # ==========================================================
 
-DATA_ROOT = '/workspace/dataset'
-MODEL_PATH = 'retinanet_custom_weights_final.pth'  # 学習済みモデルのパス
+DATA_ROOT = 'dataset'
+MODEL_PATH = 'retinanet_epoch20.pth'  # 学習済みモデルのパス
 
 # 画像一覧の取得
 import glob
