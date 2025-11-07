@@ -40,7 +40,7 @@ model = RetinaNet(
     anchor_generator=anchor_generator
 )
 
-weights_path = "Animal-Landmark-Detection-CNN/tamu/retinanet_epoch20.pth"
+weights_path = "retinanet_epoch20.pth"
 model.load_state_dict(torch.load(weights_path, map_location="cpu"))
 model.eval()
 
