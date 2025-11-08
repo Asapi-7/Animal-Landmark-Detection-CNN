@@ -42,9 +42,9 @@ def generate_gaussian_heatmap(keypoints, output_size, sigma=3.0):
     keypoints: (N, 2) のキーポイント座標 (x, y)。
     """
     NUM_POINTS = keypoints.shape[0]
-    heatmap = np.zeros((output_size, output_size, NUM_POINTS), dtype=np.float32)
+    heatmap = torch.zeros((output_size, output_size, NUM_POINTS), dtype=torch.float32)
 
-    X_grid, Y_grid = np.meshgrid(np.arange(output_size), np.arange(output_size))
+    X_grid, Y_grid = torch.meshgrid(torch.arange(output_size), torch.arange(output_size), indexing='ij')
     
     two_sigma_sq = 2 * sigma * sigma
 
@@ -59,8 +59,34 @@ def generate_gaussian_heatmap(keypoints, output_size, sigma=3.0):
         distance_sq = (X_grid - x)**2 + (Y_grid - y)**2
         
         # ガウス関数を適用
-        gaussian_map = np.exp(-distance_sq / two_sigma_sq)
+        gaussian_map = torch.exp(-distance_sq / two_sigma_sq)
         
         heatmap[:, :, i] = gaussian_map
 
-    return heatmap
+    return heatmap.permute(2, 0, 1)
+
+
+#ヒートマップから、最大の座標を抽出する (ヒートマップ->座標)
+def extract_keypoints_from_heatmap(heatmaps):
+    N, C, H, W = heatmaps.shape
+
+    flat_heatmaps = heatmaps.view(N, C, -1)
+    max_values, max_indices = torch.max(flat_heatmaps, dim=2)
+
+    y_coords = max_indices // W
+    x_coords = max_indices % W
+
+    predicted_coords = torch.stack((x_coords, y_coords), dim=2).float()
+
+    return predicted_coords
+
+def calculate_normalization_factor(landmarks):
+    coords = landmarks.reshape(-1, 9, 2)
+    x_min = coords[..., 0].min(dim=1).values
+    x_max = coords[..., 0].max(dim=1).values
+    y_min = coords[..., 1].min(dim=1).values
+    y_max = coords[..., 1].max(dim=1).values
+    width = x_max - x_min
+    height = y_max - y_min
+    diagonal = torch.sqrt(width**2 + height**2)
+    return diagonal + 1e-6    
