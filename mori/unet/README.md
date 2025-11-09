@@ -1,16 +1,17 @@
 ### 📁 データセットの準備 (Dataset Setup)
 
-現在のディレクトリ直下(unetディレクトリ)に `cropped_dataset` フォルダをしてください
+すべての画像ファイル (`.jpg`) と、対応するランドマークファイル (`.pts`) は、**unetディレクトリ**直下に配置してください。
+
+**例:** `train.py` や `inference.py` が存在する `code` ディレクトリの**一つ上の階層**に `cropped_dataset` を配置
 
 ### 3. 🎯 実行方法 (Usage)
 
-`train.py` と `inference.py` の使い方を明確にします。
+`train.py` と `inference.py` の使い方
 
 (code ディレクトリ内で実行)
-python train.py --data_dir ../cropped_dataset --epochs 30 --batch_size 16 --lr 0.0001
+python train.py --data_dir ../cropped_dataset --epochs 30 --batch_size 16 --lr 0.0001--output_dir ./run_output_unet
 
-python inference.py --model_path unet_landmark_regressor_final.pth --data_dir ../cropped_dataset --num_samples 10
-    
+python inference.py --model_path ./run_output_unet/unet_landmark_regressor_final.pth --data_dir ../cropped_dataset --samples_per_category 5 --inference_output_root ./run_output_unet/inference_results
 ### 📐 評価指標 (Metrics)
 
 本プロジェクトでは、以下の指標を用いてモデルの性能を評価します。
