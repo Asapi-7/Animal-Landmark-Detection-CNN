@@ -99,6 +99,8 @@ def train_model(model, train_dataloader, test_dataloader, criterion, optimizer, 
         test_loss, test_nme = evaluate_model_nme(model, test_dataloader, criterion, device)
         test_losses.append(test_loss)
         test_nmes.append(test_nme)
+
+        log_results_to_csv('training_log.csv', epoch + 1, avg_train_loss, test_loss, avg_train_nme, test_nme)
         
         print(f"\n--- Epoch [{epoch+1}/{num_epochs}] 完了 ---")
         print(f"  Train Loss: {avg_train_loss:.4f} | Train NME: {avg_train_nme:.4f}")
