@@ -32,7 +32,7 @@ def calculate_nme(heatmap_outputs, label_coords, device):
     predicted_coords_reshaped = extract_keypoints_from_heatmap(heatmap_outputs).to(device)
     
     # 2. 正解座標を (N, 9, 2) に整形
-    labels_reshaped = label_coords.reshape(-1, num_landmarks, 2)
+    labels_reshaped = label_coords
 
     # 3. 予測座標と正解座標間のユークリッド距離を計算 (各ランドマークごと)
     distances = torch.linalg.norm(predicted_coords_reshaped - labels_reshaped, dim=2) # [N, 9]

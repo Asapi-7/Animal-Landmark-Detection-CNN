@@ -57,10 +57,8 @@ class LandmarkHeatmapDataset(Dataset):
         keypoints_np = load_landmarks_from_pts_to_tensor(pts_path)
         
         # 3. ガウシアンヒートマップの生成 (ターゲット)
-        # keypoints_npの座標は、Resize後の画像サイズにスケールされている必要があります。
-        # 今回はResizeで固定サイズ(224x224)にしているため、座標もその範囲内にあると仮定します。
         heatmap_tensor = generate_gaussian_heatmap(keypoints_np, self.image_size, self.sigma)
 
-        coords_tensor = torch.from_numpy(keypoints_np.flatten()).float()
+        coords_tensor = torch.from_numpy(keypoints_np).float()
         
         return image_tensor, heatmap_tensor, coords_tensor, jpg_path

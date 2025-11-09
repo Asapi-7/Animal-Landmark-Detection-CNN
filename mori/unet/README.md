@@ -9,7 +9,7 @@
 `train.py` と `inference.py` の使い方
 
 (code ディレクトリ内で実行)
-python train.py --data_dir ../cropped_dataset --epochs 30 --batch_size 16 --lr 0.0001--output_dir ./run_output_unet
+python train.py --data_dir ../cropped_dataset --epochs 30 --batch_size 16 --lr 0.0001 --output_dir ./run_output_unet
 
 python inference.py --model_path ./run_output_unet/unet_landmark_regressor_final.pth --data_dir ../cropped_dataset --samples_per_category 5 --inference_output_root ./run_output_unet/inference_results
 ### 📐 評価指標 (Metrics)
