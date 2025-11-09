@@ -219,8 +219,8 @@ def main():
     print(f"出力をディレクトリ：{OUTPUT_DIR}")
 
     # 1. デバイスの設定
-    #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #device = torch.device("cpu")
     print(f"使用デバイス: {device}")
     
     # 2. ファイルリストの取得と分割
