@@ -141,11 +141,12 @@ def main():
     parser.add_argument('--batch_size', type=int, default=16, help="DataLoaderのバッチサイズ")
     parser.add_argument('--img_size', type=int, default=224, help="モデルの入力画像サイズ")
     parser.add_argument('--samples_per_category', type=int, default=5, help="カテゴリごとに描画するサンプル数")
+    parser.add_argument('--inference_output_root', type=str, default='./run_output/inference_output', help="推論結果の画像を保存するルートディレクトリ") # ★ 追加 ★
     args = parser.parse_args()
 
     # 1. デバイスの設定
-    #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #device = torch.device("cpu")
     print(f"使用デバイス: {device}")
 
     # 2. モデルの初期化と重みのロード
@@ -178,11 +179,11 @@ def main():
     print(f"動物種(カテゴリ)数：{len(category_files)}")
 
     #4. カテゴリごとに処理を実装
-    base_save_dir = "./inference_out"
+    base_save_dir = args.inference_output_root 
     total_saved_count = 0
 
     for category, files in category_files.items():
-        save_dir = os.path.join(base_save_dir, category)
+        save_dir_category = os.path.join(base_save_dir, category)
         os.makedirs(save_dir, exist_ok=True)
 
         num_to_sample = min(args.samples_per_category, len(files))
@@ -212,7 +213,7 @@ def main():
             device=device,
             model_input_size=args.img_size,
             num_samples=num_to_sample, # 描画するサンプル数をカテゴリのサイズに合わせる
-            save_dir=save_dir # カテゴリごとのサブディレクトリに保存
+            save_dir=save_dir_category # カテゴリごとのサブディレクトリに保存
         )
         total_saved_count += num_to_sample
     

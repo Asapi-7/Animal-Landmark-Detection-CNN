@@ -52,7 +52,7 @@ def calculate_nme(heatmap_outputs, label_coords, device):
 
 # 評価関数 (evaluate_model) はそのまま使用可能
 
-def train_model(model, train_dataloader, test_dataloader, criterion, optimizer, device, num_epochs):
+def train_model(model, train_dataloader, test_dataloader, criterion, optimizer, device, num_epochs, output_dir):
     # ... (初期化部分)
     
     # --- 損失とNMEの記録用のリスト ---
@@ -100,17 +100,19 @@ def train_model(model, train_dataloader, test_dataloader, criterion, optimizer, 
         test_losses.append(test_loss)
         test_nmes.append(test_nme)
 
+        CSV_PATH = os.path.join(output_dir, 'training_log.csv')
         log_results_to_csv('training_log.csv', epoch + 1, avg_train_loss, test_loss, avg_train_nme, test_nme)
         
         print(f"\n--- Epoch [{epoch+1}/{num_epochs}] 完了 ---")
-        print(f"  Train Loss: {avg_train_loss:.4f} | Train NME: {avg_train_nme:.4f}")
-        print(f"  Test Loss: {test_loss:.4f} | Test NME: {test_nme:.4f}")
+        print(f"  Train Loss: {avg_train_loss:.6f} | Train NME: {avg_train_nme:.4f}")
+        print(f"  Test Loss: {test_loss:.6f} | Test NME: {test_nme:.4f}")
 
     # --- 最終評価とモデルの保存 ---
     final_test_loss, final_test_nme = evaluate_model_nme(model, test_dataloader, criterion, device)
     print(f"\n✅ Final Test Loss: {final_test_loss:.4f}, Final Test NME: {final_test_nme:.4f}")
 
-    MODEL_PATH_SAVE = 'unet_landmark_regressor_final.pth'
+    MODEL_FILENAME = 'unet_landmark_regressor_final.pth'
+    MODEL_PATH_SAVE = os.path.join(output_dir, MODEL_FILENAME)
     torch.save(model.state_dict(), MODEL_PATH_SAVE)
     print(f"モデルが '{MODEL_PATH_SAVE}' として保存されました。")
     
@@ -192,10 +194,11 @@ def plot_metrics(train_losses, test_losses, train_nmes, test_nmes, num_epochs):
     axes[1].legend()
     axes[1].grid(True)
     
+    PLOT_PATH = os.path.join(output_dir, 'training_metrics_plot.png')
     plt.tight_layout()
-    plt.savefig('training_metrics_plot.png')
+    plt.savefig(PLOT_PATH)
     plt.close(fig)
-    print("✅ 学習曲線 (Loss & NME) を 'training_metrics_plot.png' に保存しました。")
+    print("✅ 学習曲線 (Loss & NME) を '{PLOT_PATH}' に保存しました。")
 
 
 def main():
@@ -207,7 +210,13 @@ def main():
     parser.add_argument('--img_size', type=int, default=224, help="画像サイズ (H=W)")
     parser.add_argument('--sigma', type=float, default=3.0, help="ガウシアンヒートマップのシグマ")
     parser.add_argument('--test_size', type=float, default=0.2, help="テストデータの割合")
+    parser.add_argument('--output_dir', type=str, default='./run_output', help="全ての出力ファイルを保存するディレクトリパス") # ★ 追加 ★
     args = parser.parse_args()
+
+    #出力ディレクトリを作成
+    OUTPUT_DIR = args.output_dir
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    print(f"出力をディレクトリ：{OUTPUT_DIR}")
 
     # 1. デバイスの設定
     #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -259,7 +268,7 @@ def main():
     
     # 5. 訓練の実行
     trained_model, test_loader, device, _, _, _, _ = train_model(
-        model, train_dataloader, test_dataloader, criterion, optimizer, device, args.epochs
+        model, train_dataloader, test_dataloader, criterion, optimizer, device, args.epochs, OUTPUT_DIR
     )
     
     # 6. 予測結果の描画と保存 (ご提示のコードのsave_landmark_predictions関数が必要です)

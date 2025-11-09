@@ -2,6 +2,49 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class BasicResidualBlock(nn.Module):
+    """
+    ResNetの基本的な残差ブロック (2層の3x3畳み込み)
+    """
+    def __init__(self, in_channels, out_channels):
+        super(BasicResidualBlock, self).__init__()
+        
+        # 1. 残差マッピング (F(x)) - 2層のConv-BN-ReLU
+        # Note: U-Netのエンコーダ内のブロックでは空間サイズを変更しない（MaxPoolingで行うため）
+        self.conv_sequence = nn.Sequential(
+            # 1層目: 入力チャネルをout_channelsに変換
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            
+            # 2層目: チャネル数を維持
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels) # 最後のReLUは加算後に行う
+        )
+        
+        # 2. ショートカット接続 (Identity Mapping)
+        # チャンネル数が異なる場合にのみ、1x1畳み込みでチャネル数を合わせる
+        if in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+        else:
+            # チャンネル数が同じ場合は恒等写像（何もしない）
+            self.shortcut = nn.Identity()
+
+    def forward(self, x):
+        # 残差パスの計算
+        residual = self.conv_sequence(x)
+        
+        # ショートカットパスの計算
+        shortcut = self.shortcut(x)
+        
+        # 残差接続: 恒等写像を加算し、最後にReLUを適用
+        out = residual + shortcut
+        
+        return F.relu(out, inplace=True)
+
 class UNet(nn.Module):
     """
     標準的な3層エンコーダ、3層デコーダを持つU-Netモデル
@@ -35,15 +78,15 @@ class UNet(nn.Module):
         
         # --- エンコーダ (ダウンサンプリング経路) ---
         # U-Netの各レベルでの特徴抽出ブロック
-        self.enc1 = self.conv_block(in_channels, 64)   # 3 -> 64
-        self.enc2 = self.conv_block(64, 128)           # 64 -> 128
-        self.enc3 = self.conv_block(128, 256)          # 128 -> 256
+        self.enc1 = BasicResidualBlock(in_channels, 64)   # 3 -> 64
+        self.enc2 = BasicResidualBlock(64, 128)           # 64 -> 128
+        self.enc3 = BasicResidualBlock(128, 256)          # 128 -> 256
 
         # プーリング層 (ダウンサンプリング)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
         # --- ボトルネック ---
-        self.bottleneck = self.conv_block(256, 512)    # 256 -> 512
+        self.bottleneck = BasicResidualBlock(256, 512)    # 256 -> 512
 
         # --- デコーダ (アップサンプリング経路) ---
         
@@ -51,17 +94,17 @@ class UNet(nn.Module):
         # 転置畳み込み (ConvTranspose2d) で空間サイズを2倍にし、チャンネル数を半分にする
         self.upconv3 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2) 
         # 結合後の畳み込みブロック (スキップ接続の 256ch + upconvの 256ch = 512ch が入力)
-        self.dec3 = self.conv_block(512, 256) 
+        self.dec3 = BasicResidualBlock(512, 256) 
         
         # 2. 中間層のアップサンプリング
         self.upconv2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
         # 結合後の畳み込みブロック (スキップ接続の 128ch + upconvの 128ch = 256ch が入力)
-        self.dec2 = self.conv_block(256, 128)
+        self.dec2 = BasicResidualBlock(256, 128)
         
         # 1. 最浅層のアップサンプリング
         self.upconv1 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
         # 結合後の畳み込みブロック (スキップ接続の 64ch + upconvの 64ch = 128ch が入力)
-        self.dec1 = self.conv_block(128, 64)
+        self.dec1 = BasicResidualBlock(128, 64)
 
         # --- 最終出力層 ---
         # 1x1畳み込みで最終的なチャンネル数 (クラス数 or ヒートマップ数) に変換
