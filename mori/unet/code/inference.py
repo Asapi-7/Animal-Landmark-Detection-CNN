@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 import glob
 from tqdm import tqdm
+import matplotlib.patheffects as pe
 
 # 依存ファイルのインポート
 from unet import UNet 
@@ -114,7 +115,7 @@ def save_landmark_predictions(model, data_loader, device, model_input_size, num_
                     # 番号 (黄色)
                     ax.annotate(str(k_idx+1), (x + tmp, y + tmp), color='yellow', fontsize=16, 
                                 ha='center', va='center', fontweight='bold',
-                                path_effects=[plt.matplotlib.patheffects.withStroke(linewidth=3, foreground="black")])
+                                path_effects=[pe.withStroke(linewidth=3, foreground="black")])
 
 
                 ax.set_title(f"Predicted Landmarks: {os.path.basename(original_img_path)}")
@@ -139,6 +140,7 @@ def main():
     parser.add_argument('--num_samples', type=int, default=10, help="推論・描画するサンプル数")
     parser.add_argument('--batch_size', type=int, default=16, help="DataLoaderのバッチサイズ")
     parser.add_argument('--img_size', type=int, default=224, help="モデルの入力画像サイズ")
+    parser.add_argument('--samples_per_category', type=int, default=5, help="カテゴリごとに描画するサンプル数")
     args = parser.parse_args()
 
     # 1. デバイスの設定
@@ -161,30 +163,60 @@ def main():
     if not all_jpg_files:
         print(f"エラー: データセットディレクトリ '{args.data_dir}' 内に.jpgファイルが見つかりません。")
         return
-    
-    # 全ファイルリストをデータセットに渡す (推論用)
-    inference_dataset = LandmarkHeatmapDataset(
-        file_list=all_jpg_files, # 全ファイルをリストとして渡す
-        root_dir=args.data_dir,
-        image_size=args.img_size,
-        sigma=3.0 # シグマ値は推論には関係ないがDatasetの初期化に必要
-    )
-    
-    # 推論時、shuffleは不要
-    inference_dataloader = DataLoader(
-        inference_dataset, batch_size=args.batch_size, shuffle=False, num_workers=os.cpu_count() or 1
-    )
 
-    # 4. 推論と描画の実行
-    save_landmark_predictions(
-        model=model,
-        data_loader=inference_dataloader,
-        device=device,
-        model_input_size=args.img_size,
-        num_samples=args.num_samples,
-        save_dir="./inference_output"
-    )
-    print("--- 予測ランドマークの描画と保存が完了しました。---")
+    # ファイル名からプレフィックス（動物種名）を抽出
+    # 例: 'addax_15.jpg' -> 'addax'
+    category_files = {}
+    for path in all_jpg_files:
+        filename = os.path.basename(path)
+        category = filename.split('_')[0]
+
+        if category not in category_files:
+            category_files[category] = []
+        category_files[category].append(path)
+
+    print(f"動物種(カテゴリ)数：{len(category_files)}")
+
+    #4. カテゴリごとに処理を実装
+    base_save_dir = "./inference_out"
+    total_saved_count = 0
+
+    for category, files in category_files.items():
+        save_dir = os.path.join(base_save_dir, category)
+        os.makedirs(save_dir, exist_ok=True)
+
+        num_to_sample = min(args.samples_per_category, len(files))
+
+        selected_files = np.random.choice(files, size=num_to_sample, replace=False)
+
+        print(f"\n -> 処理中： {category} ({num_to_sample} サンプル)")
+
+        # サンプルファイルリストでデータセット/データローダーを再構成
+        inference_dataset = LandmarkHeatmapDataset(
+            file_list=list(selected_files),
+            root_dir=args.data_dir,
+            image_size=args.img_size,
+            sigma=3.0
+        )
+        inference_dataloader = DataLoader(
+            inference_dataset, batch_size=args.batch_size, shuffle=False, num_workers=os.cpu_count() or 1
+        )
+
+
+        # 5. 推論と描画の実行
+        # save_landmark_predictions 関数を呼び出し
+        # サンプル数には DataLoader のサイズ上限を渡し、保存先ディレクトリを指定
+        save_landmark_predictions(
+            model=model,
+            data_loader=inference_dataloader,
+            device=device,
+            model_input_size=args.img_size,
+            num_samples=num_to_sample, # 描画するサンプル数をカテゴリのサイズに合わせる
+            save_dir=save_dir # カテゴリごとのサブディレクトリに保存
+        )
+        total_saved_count += num_to_sample
+    
+    print(f"\n--- 予測ランドマークの描画と保存が完了しました。全カテゴリ合計 {total_saved_count} 枚 ---")
 
 if __name__ == '__main__':
     main()
