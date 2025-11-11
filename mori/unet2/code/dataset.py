@@ -59,12 +59,12 @@ class AnimalKeypointDataset(Dataset):
 
         heatmaps = generate_heatmaps(scaled_keypoints, config.IMAGE_SIZE, config.SIGMA)
 
-        sample = {'image':image, 'label_coords':keypoints, 'heatmaps':heatmaps}
+        sample = {'image':image, 'keypoints':keypoints, 'heatmaps':heatmaps}
 
         if self.transform:
             sample['image'] = self.transform(sample['image'])
             sample['heatmaps'] = torch.from_numpy(sample['heatmaps'])
-            sample['label_coords'] = torch.from_numpy(sample['label_coords'])
+            sample['keypoints'] = torch.from_numpy(sample['keypoints'])
 
         return sample
 
