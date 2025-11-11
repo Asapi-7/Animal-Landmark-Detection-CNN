@@ -80,6 +80,7 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device):
 def evaluate(model, dataloader, criterion, device):
     model.eval()
     running_loss = 0.0
+    running_nme = 0.0
     
     with torch.no_grad():
         progress_bar = tqdm(dataloader, desc="Evaluating", leave=False)
