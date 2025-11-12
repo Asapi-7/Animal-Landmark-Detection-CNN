@@ -39,9 +39,9 @@ def decode_heatmaps_to_coordinates(heatmaps, image_size):
     max_indices = torch.argmax(flat_heatmaps, dim=2) 
     y_coords = max_indices // W
     x_coords = max_indices % W
-    normalized_x = (x_coords.float() + 0.5) / W
-    normalized_y = (y_coords.float() + 0.5) / H
-    coordinates = torch.stack((normalized_x, normalized_y), dim=2) # [N, C, 2]
+    x_coords = (x_coords.float() + 0.5)
+    y_coords = (y_coords.float() + 0.5)
+    coordinates = torch.stack((x_coords, y_coords), dim=2) # [N, C, 2]
     return coordinates.view(batch_size, num_keypoints * 2)
 
 def train_one_epoch(model, dataloader, criterion, optimizer, device):
