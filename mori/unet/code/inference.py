@@ -184,7 +184,7 @@ def main():
 
     for category, files in category_files.items():
         save_dir_category = os.path.join(base_save_dir, category)
-        os.makedirs(save_dir, exist_ok=True)
+        os.makedirs(save_dir_category, exist_ok=True)
 
         num_to_sample = min(args.samples_per_category, len(files))
 
