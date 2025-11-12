@@ -7,6 +7,8 @@ from torch.utils.data import Dataset
 from torchvision.transforms import functional as F
 from torchvision import transforms as T
 from torch.utils.data import DataLoader
+import torchvision.transforms.v2 as T_v2
+from torchvision.tv_tensors import BoundingBoxes, Mask, Image as TVImage
 import glob # 👈 追加: ファイルパスのリスト取得用
 from sklearn.model_selection import train_test_split # 👈 追加: データ分割用
 
@@ -85,6 +87,7 @@ class CustomObjectDetectionDataset(Dataset):
         # .ptsファイルのパスを作成
         pts_path = os.path.join(self.root, pts_filename)
 
+        """"
         # 2. データ読み込み
         img = Image.open(img_path_full).convert("RGB") # 👈 修正: img_path_fullを使用
         boxes_np, labels_np = self._parse_pts(pts_path)
@@ -107,11 +110,51 @@ class CustomObjectDetectionDataset(Dataset):
             img = self.transforms(img)
 
         return img, target
+        """
+        # 2. データ読み込み
+        img = Image.open(img_path_full).convert("RGB")
+        boxes_np, labels_np = self._parse_pts(pts_path)
+
+        # 3. ターゲット辞書の作成と v2 形式への変換 👈 ここを修正
+
+        # 3-1. 画像のサイズを取得 (H, W)
+        W, H = img.size # PIL Imageのサイズは (W, H)
+
+        if boxes_np.size == 0:
+            # BBOXがない場合は空のテンソルを作成
+            boxes_tensor = torch.empty((0, 4), dtype=torch.float32)
+        else:
+            boxes_tensor = torch.as_tensor(boxes_np, dtype=torch.float32)
+
+        labels_tensor = torch.as_tensor(labels_np, dtype=torch.int64)
+
+        # 3-2. v2 形式の BoundingBoxes に変換
+        boxes_v2 = BoundingBoxes(
+            boxes_tensor, 
+            format="XYXY",  # あなたのデータ形式に合わせる
+            canvas_size=(H, W)
+        )
+        
+        target = {}
+        target["boxes"] = boxes_v2 # 👈 v2形式のBBOXを格納
+        target["labels"] = labels_tensor
+        target["image_id"] = torch.tensor([idx])
+        
+        # 4. 変換（transforms）の適用 👈 ターゲットも一緒に渡す
+        if self.transforms is not None:
+            # v2では、Transformsに画像とターゲットの両方を渡す
+            img, target = self.transforms(img, target) 
+
+        # 変換後、target["boxes"] は BoundingBoxes オブジェクトのままなので、
+        # そのままRetinaNetに渡すことができます。
+
+        return img, target
 
     def __len__(self):
         return len(self.imgs)
 
 # Transformsの定義 データ拡張
+"""""
 def get_transform(train):
     transforms = []
     transforms.append(T.ToTensor())
@@ -119,6 +162,22 @@ def get_transform(train):
         transforms.append(T.RandomHorizontalFlip(0.5))
         transforms.append(T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2))
     return T.Compose(transforms)
+"""
+
+# Transformsの定義 データ拡張をv2に置き換える
+def get_transform(train):
+    transforms = []
+    # v2のToTensor()を使用: PIL Image/NumPy array -> Tensorに変換
+    transforms.append(T_v2.ToTensor()) 
+    
+    if train:
+        # v2のRandomHorizontalFlipを使用: BBOXも自動でフリップされる
+        transforms.append(T_v2.RandomHorizontalFlip(0.5))
+        # v2のColorJitterを使用
+        transforms.append(T_v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2))
+        
+    # T.ComposeではなくT_v2.Composeを使用
+    return T_v2.Compose(transforms)
 
 
 # Collate Functionの定義
