@@ -8,8 +8,8 @@ NUM_KEYPOINTS = 9
 
 SIGMA = 5
 
-#DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-DEVICE = 'cpu'
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+#DEVICE = 'cpu'
 
 EPOCHS = 30
 
