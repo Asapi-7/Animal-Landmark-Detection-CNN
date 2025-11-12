@@ -59,7 +59,7 @@ class AnimalKeypointDataset(Dataset):
 
         heatmaps = generate_heatmaps(scaled_keypoints, config.IMAGE_SIZE, config.SIGMA)
 
-        sample = {'image':image, 'keypoints':keypoints, 'heatmaps':heatmaps}
+        sample = {'image':image, 'keypoints':scaled_keypoints, 'heatmaps':heatmaps}
 
         if self.transform:
             sample['image'] = self.transform(sample['image'])
