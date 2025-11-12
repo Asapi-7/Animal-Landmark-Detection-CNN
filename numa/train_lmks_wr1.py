@@ -456,7 +456,7 @@ def train_model():
     # --- パラメータ設定 ---
     DATA_DIR = "./cropped_dataset" # 訓練データセットのパス
     TEST_SIZE = 0.2 # テストデータの割合 (20%)
-    BATCH_SIZE = 32 # CPU環境ではこの値を小さくすることを推奨 (例: 4や8)
+    BATCH_SIZE = 8 # CPU環境ではこの値を小さくすることを推奨 (例: 4や8)
     NUM_LANDMARKS = 9
     NUM_EPOCHS = 20
     LEARNING_RATE = 0.001
