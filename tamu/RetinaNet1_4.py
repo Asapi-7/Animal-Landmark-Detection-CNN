@@ -117,7 +117,7 @@ class CustomObjectDetectionDataset(Dataset):
 
         # 3. ターゲット辞書の作成と v2 形式への変換 👈 ここを修正
 
-        # 3-1. 画像のサイズを取得 (H, W)
+        # 3-1. 画像のサイズを取得 (H, W) 224×224
         W, H = img.size # PIL Imageのサイズは (W, H)
 
         if boxes_np.size == 0:
@@ -267,7 +267,7 @@ num_feature_maps = len(features)
 print("FPN 出力層数:", num_feature_maps)
 
 # AnchorGenerator を出力層数に合わせて作成
-base_sizes = [8, 16, 32, 64, 128, 256]
+base_sizes = [8, 16, 32, 64, 128, 224]
 sizes_for_anchor = tuple((s,) for s in base_sizes[:num_feature_maps])
 
 anchor_generator = AnchorGenerator(
