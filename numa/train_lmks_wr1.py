@@ -492,10 +492,10 @@ def train_model():
     test_dataset = LandmarkDataset(test_files)
         
     train_loader = DataLoader(
-        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4 
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=1 
     )
     test_loader = DataLoader(
-        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4 
+        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=1 
     )
     
     # --- モデル、損失関数、最適化手法の設定 ---
