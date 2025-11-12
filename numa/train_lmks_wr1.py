@@ -492,11 +492,10 @@ def train_model():
     test_dataset = LandmarkDataset(test_files)
         
     train_loader = DataLoader(
-        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0 # CPU環境のためnum_workers=0を推奨
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4 
     )
-    # テスト時の画像パスの対応のため shuffle=False にしておく
     test_loader = DataLoader(
-        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0 # CPU環境のためnum_workers=0を推奨
+        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4 
     )
     
     # --- モデル、損失関数、最適化手法の設定 ---
