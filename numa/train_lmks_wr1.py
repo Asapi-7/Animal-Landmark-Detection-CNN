@@ -1,17 +1,17 @@
 # =================================================================
-# 0. 必要なライブラリのインポート aaaaaaaaaaaaaaaaaa
+# 0. 必要なライブラリのインポート
 # =================================================================
 import os
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-from PIL import Image, ImageDraw, ImageFont # <--- ImageFont を追加
+from PIL import Image, ImageDraw, ImageFont 
 import glob
 from sklearn.model_selection import train_test_split
-import matplotlib.pyplot as plt # <--- Matplotlib を使用
+import matplotlib.pyplot as plt 
 from tqdm import tqdm
-import numpy as np # <--- NumPy を使用
+import numpy as np 
 
 # ターゲットサイズ (データセット作成コードと合わせる)
 IMG_SIZE = 224
@@ -48,10 +48,8 @@ def load_landmarks_from_pts_to_tensor(pts_path):
 
 # =================================================================
 # 2. PyTorch Dataset クラス
-# LandmarkDataset.__getitem__を (画像, ランドマーク, 画像パス) を返すよう変更
 # =================================================================
 class LandmarkDataset(Dataset):
-    # ファイルパスのリストを外部から受け取るよう修正 (train/test分割に必要)
     def __init__(self, file_paths):
         self.image_files = file_paths
 
@@ -78,110 +76,105 @@ class LandmarkDataset(Dataset):
         landmarks = load_landmarks_from_pts_to_tensor(pts_path) # 座標 [18] を読み込み
 
         # 推論・描画のために元の画像パスも返す
-        return transformed_image, landmarks, img_path # <--- 変更: img_path を追加
+        return transformed_image, landmarks, img_path 
 
 # =================================================================
-# 3. モデル定義 (カスタムResNet18を使用)
-# (BasicBlock, ResNet18, LandmarkRegressor は変更なし)
+# 3. モデル定義 (Wide ResNet に修正)
 # =================================================================
 
-class BasicBlock(nn.Module):
+class WideBasicBlock(nn.Module):
     '''
-    ResNet18における残差ブロック
-    in_channels : 入力チャネル数
-    out_channels: 出力チャネル数
-    stride      : 畳み込み層のストライド
+    Wide ResNetにおける残差ブロック
+    widen_factorによってチャネル幅が拡張される
     '''
-    def __init__(self, in_channels: int, out_channels: int,
-                 stride: int=1):
+    def __init__(self, in_channels: int, out_channels: int, stride: int=1, widen_factor: int=1):
         super().__init__()
+        
+        # Wide化された中間チャネル数を計算 (WideResNetの核となる変更点)
+        internal_channels = out_channels * widen_factor
 
-        # 残差接続
-        self.conv1 = nn.Conv2d(in_channels, out_channels,
-                               kernel_size=3, stride=stride,
-                               padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels,
+        # 畳み込み層の in_channels/out_channels を変更
+        self.conv1 = nn.Conv2d(in_channels, internal_channels,
+                               kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(internal_channels)
+        self.relu = nn.ReLU(inplace=True)
+        
+        self.conv2 = nn.Conv2d(internal_channels, out_channels, # out_channelsに戻す
                                kernel_size=3, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
 
         # スキップ接続のダウンサンプリング (寸法合わせ)
         self.downsample = None
         if stride != 1 or in_channels != out_channels:
              self.downsample = nn.Sequential(
-                 nn.Conv2d(in_channels, out_channels, kernel_size=1,
-                           stride=stride, bias=False),
+                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
                  nn.BatchNorm2d(out_channels)
              )
-
-    '''
-    順伝播関数
-    x: 入力, [バッチサイズ, 入力チャネル数, 高さ, 幅]
-    '''
+    
     def forward(self, x: torch.Tensor):
-        identity = x # 恒等写像 (スキップ接続) を保存
-
-        # 残差写像
+        identity = x
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
         out = self.conv2(out)
         out = self.bn2(out)
-
-        # ダウンサンプリング処理
+        
         if self.downsample is not None:
              identity = self.downsample(identity)
-
-        # 残差写像と恒等写像の要素毎の和を計算
+             
         out += identity
-
         out = self.relu(out)
-
         return out
 
-class ResNet18(nn.Module):
+class WideResNet(nn.Module):
     '''
-    ResNet18モデル
-    num_classes: 分類対象の物体クラス数 (ランドマーク回帰用に置き換えられる)
+    Wide ResNetモデル (深さと広さをハイパーパラメータとして持つ)
     '''
-    def __init__(self, num_classes: int):
+    def __init__(self, depth: int, widen_factor: int, num_classes: int):
         super().__init__()
+        
+        # WideResNetのブロック数計算 (例: depth=18の場合 n=2)
+        if (depth - 4) % 6 != 0:
+            # ResNetのBottleneck構造ではないため、BasicBlockベースのResNet18(4+2*2*4=20層)を想定して、
+            # 6n+4 のチェックは省略し、ResNet18互換の構造を維持します。
+            # ただし、ブロック数 n=2 を固定とする
+            n = 2 
+        else:
+            n = (depth - 4) // 6 
 
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2,
-                               padding=3, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
+        self.in_channels = 64 # 初期チャネル数
+        
+        # 最初の層とプーリング
+        self.conv1 = nn.Conv2d(3, self.in_channels, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(self.in_channels)
         self.relu = nn.ReLU(inplace=True)
-
-        self.max_pool = nn.MaxPool2d(kernel_size=3,
-                                     stride=2, padding=1)
-
-        self.layer1 = nn.Sequential(
-            BasicBlock(64, 64),
-            BasicBlock(64, 64),
-        )
-        self.layer2 = nn.Sequential(
-            BasicBlock(64, 128, stride=2),
-            BasicBlock(128, 128),
-        )
-        self.layer3 = nn.Sequential(
-            BasicBlock(128, 256, stride=2),
-            BasicBlock(256, 256),
-        )
-        self.layer4 = nn.Sequential(
-            BasicBlock(256, 512, stride=2),
-            BasicBlock(512, 512),
-        )
-
+        self.max_pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        
+        # 各レイヤーの出力チャネル数 (WRNではこの値がwiden_factor倍されて内部チャネルになる)
+        channels = [64, 128, 256, 512]
+        
+        # 各層の定義に _make_layer 関数を使用
+        # BasicBlockをWideBasicBlockに置き換え、widen_factorを渡す
+        self.layer1 = self._make_layer(WideBasicBlock, channels[0], n, stride=1, widen_factor=widen_factor)
+        self.layer2 = self._make_layer(WideBasicBlock, channels[1], n, stride=2, widen_factor=widen_factor)
+        self.layer3 = self._make_layer(WideBasicBlock, channels[2], n, stride=2, widen_factor=widen_factor)
+        self.layer4 = self._make_layer(WideBasicBlock, channels[3], n, stride=2, widen_factor=widen_factor)
+        
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.linear = nn.Linear(channels[-1], num_classes) # num_classesはここでは仮の値
 
-        self.linear = nn.Linear(512, num_classes) # num_classesはここでは仮の値
+    def _make_layer(self, block, out_channels, num_blocks, stride, widen_factor):
+        layers = []
+        # 各層の最初のブロックはストライドとチャネル変更を適用
+        layers.append(block(self.in_channels, out_channels, stride, widen_factor))
+        self.in_channels = out_channels
+        
+        # 残りのブロック
+        for _ in range(1, num_blocks):
+            layers.append(block(self.in_channels, out_channels, stride=1, widen_factor=widen_factor))
+        
+        return nn.Sequential(*layers)
 
-    '''
-    順伝播関数
-    x           : 入力, [バッチサイズ, 入力チャネル数, 高さ, 幅]
-    return_embed: 特徴量を返すかロジットを返すかを選択する真偽値
-    '''
     def forward(self, x: torch.Tensor, return_embed: bool=False):
         x = self.conv1(x)
         x = self.bn1(x)
@@ -204,11 +197,12 @@ class ResNet18(nn.Module):
         return x
 
 class LandmarkRegressor(nn.Module):
-    def __init__(self, num_landmarks=9):
+    # depth=18, widen_factor=2 をデフォルト値として追加
+    def __init__(self, num_landmarks=9, depth=18, widen_factor=2): 
         super(LandmarkRegressor, self).__init__()
         
-        # 1. Backbone: カスタムResNet18を使用
-        self.backbone = ResNet18(num_classes=1000)
+        # 1. Backbone: WideResNetを使用し、パラメータを渡す
+        self.backbone = WideResNet(depth=depth, widen_factor=widen_factor, num_classes=1000)
         
         # 2. Head: Dense層 (最終層) の変更
         num_features = self.backbone.linear.in_features
@@ -317,7 +311,7 @@ def plot_loss_curve(train_losses, test_losses, num_epochs):
     plt.show()
 
 # =================================================================
-# 6. ランドマーク描画ヘルパー関数 (PIL用、今回は使わないが残す)
+# 6. ランドマーク描画ヘルパー関数 (PIL用)
 # =================================================================
 def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
     """
@@ -352,7 +346,7 @@ def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
     return image
 
 # =================================================================
-# 7. 予測結果を画像に描画して保存する関数 <--- Matplotlib描画ロジックを追加
+# 7. 予測結果を画像に描画して保存する関数 
 # =================================================================
 def save_landmark_predictions(model, data_loader, device, num_samples=5, save_dir="./predictions_output"):
     """
@@ -429,7 +423,7 @@ def save_landmark_predictions(model, data_loader, device, num_samples=5, save_di
 
                 # --- ランドマーク点を描画 ---
                 ax.scatter(scaled_landmarks_x, scaled_landmarks_y, 
-                           c='red', marker='o', s=50, label=None)
+                            c='red', marker='o', s=50, label=None)
                 
                 # --- ランドマークに番号を振る ---
                 for k_idx in range(NUM_LANDMARKS): # NUM_LANDMARKSは9
@@ -462,14 +456,19 @@ def train_model():
     # --- パラメータ設定 ---
     DATA_DIR = "./cropped_dataset" # 訓練データセットのパス
     TEST_SIZE = 0.2 # テストデータの割合 (20%)
-    BATCH_SIZE = 32
+    BATCH_SIZE = 8 # CPU環境ではこの値を小さくすることを推奨 (例: 4や8)
     NUM_LANDMARKS = 9
     NUM_EPOCHS = 20
     LEARNING_RATE = 0.001
     
+    # --- WideResNet パラメータ設定 ---
+    MODEL_DEPTH = 18 
+    MODEL_WIDEN_FACTOR = 2 # Wide ResNetとして設定 (ResNet18の2倍の幅)
+    
     # --- デバイス設定 ---
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f"訓練デバイス: {device}")
+    print(f"WideResNet設定: Depth={MODEL_DEPTH}, Widen Factor={MODEL_WIDEN_FACTOR}")
     
     # --- ファイルリストの取得と分割 (train/test分割) ---
     try:
@@ -493,15 +492,18 @@ def train_model():
     test_dataset = LandmarkDataset(test_files)
         
     train_loader = DataLoader(
-        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=1 
     )
-    # テスト時の画像パスの対応のため shuffle=False にしておく
     test_loader = DataLoader(
-        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4 
+        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=1 
     )
     
     # --- モデル、損失関数、最適化手法の設定 ---
-    model = LandmarkRegressor(num_landmarks=NUM_LANDMARKS)
+    model = LandmarkRegressor(
+        num_landmarks=NUM_LANDMARKS, 
+        depth=MODEL_DEPTH, 
+        widen_factor=MODEL_WIDEN_FACTOR
+    )
     model.to(device)
     
     criterion = nn.MSELoss() 
@@ -544,7 +546,7 @@ def train_model():
     final_test_loss , final_test_nme = evaluate_model(model, test_loader, criterion, device)
     print(f"\n✅ Final Test Loss: {final_test_loss:.4f}, Final Test NME: {final_test_nme:.4f}")
 
-    MODEL_PATH_SAVE = 'landmark_regressor_final_2.pth' # モデル保存パスをローカル変数に変更
+    MODEL_PATH_SAVE = 'landmark_regressor_wideresnet.pth' # モデル保存パスをWideResNet用に変更
     torch.save(model.state_dict(), MODEL_PATH_SAVE)
     print(f"モデルが '{MODEL_PATH_SAVE}' として保存されました。")
     
@@ -556,7 +558,7 @@ def train_model():
     return model, test_loader, device 
 
 # =================================================================
-# 9. スクリプト実行 (train_modelの戻り値を利用するよう修正)
+# 9. スクリプト実行
 # =================================================================
 if __name__ == '__main__':
     # 訓練を実行し、訓練済みモデルとテストローダーを取得
@@ -569,6 +571,6 @@ if __name__ == '__main__':
         data_loader=test_loader, 
         device=device, 
         num_samples=5, 
-        save_dir="./predictions_output" # 保存先ディレクトリ
+        save_dir="./predictions_output_wrn" # 保存先ディレクトリをWRN用に変更
     )
     print("--- 予測ランドマークの描画と保存が完了しました。---")
