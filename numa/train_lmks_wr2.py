@@ -431,7 +431,7 @@ def train_model():
     TEST_SIZE = 0.2 # テストデータの割合 (20%)
     BATCH_SIZE = 8 
     NUM_LANDMARKS = 9
-    NUM_EPOCHS = 20
+    NUM_EPOCHS = 10
     LEARNING_RATE = 0.001
     
     # --- WideResNet パラメータ設定 ---
@@ -466,10 +466,10 @@ def train_model():
     test_dataset = LandmarkDataset(test_files)
         
     train_loader = DataLoader(
-        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=1 
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2 
     )
     test_loader = DataLoader(
-        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=1 
+        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2 
     )
     
     # --- モデル、損失関数、最適化手法の設定 ---
