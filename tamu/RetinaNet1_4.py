@@ -7,8 +7,6 @@ from torch.utils.data import Dataset
 from torchvision.transforms import functional as F
 from torchvision import transforms as T
 from torch.utils.data import DataLoader
-import torchvision.transforms.v2 as T_v2
-from torchvision.tv_tensors import BoundingBoxes, Mask, Image as TVImage
 import glob # 👈 追加: ファイルパスのリスト取得用
 from sklearn.model_selection import train_test_split # 👈 追加: データ分割用
 
@@ -23,18 +21,29 @@ from tqdm import tqdm
 import torch.optim as optim
 from torchvision.ops import box_iou
 
+import random
+import cv2
+
 # データセット
 class CustomObjectDetectionDataset(Dataset):
-    # ⚠️ __init__を修正: rootではなく、画像パスのリストを受け取る
-    def __init__(self, img_list, root, transforms=None):
-        self.root = root # .ptsファイルを見つけるためにrootを保持
+    def __init__(self, img_list, root, transforms=None, augment=False):
+        """
+        img_list: 画像ファイルのリスト
+        root: .ptsファイルのあるルートディレクトリ
+        augment: データ拡張を行うかどうか
+        """
+        self.root = root
+        self.imgs = img_list
         self.transforms = transforms
-        self.imgs = img_list # 👈 既に分割された画像パスのリストを使用
-        
+        self.augment = augment
+
+        # カラージッター設定（BBoxに影響しない）
+        self.color_transform = T.ColorJitter(
+            brightness=0.2, contrast=0.2, saturation=0.2
+        )
+        self.to_tensor = T.ToTensor()
+
     def _parse_pts(self, pts_path):
-    
-         #.ptsファイルから2点 (左上と右下など) を読み取り、
-    
         boxes = []
         labels = []
 
@@ -45,15 +54,11 @@ class CustomObjectDetectionDataset(Dataset):
         with open(pts_path, 'r') as f:
             for line in f:
                 line = line.strip()
-            # 空行やヘッダー、波括弧をスキップ
                 if not line or line.startswith("version") or line in ["{", "}"]:
                     continue
-
-            # "129 100" のような座標ペアを読む
                 parts = line.split()
                 if len(parts) != 2:
                     continue
-
                 try:
                     x, y = float(parts[0]), float(parts[1])
                     xs.append(x)
@@ -65,119 +70,65 @@ class CustomObjectDetectionDataset(Dataset):
             xmin, xmax = min(xs), max(xs)
             ymin, ymax = min(ys), max(ys)
             boxes = np.array([[xmin, ymin, xmax, ymax]], dtype=np.float32)
-            labels = np.array([1], dtype=np.int64)  # ← 全て同じクラス扱い
+            labels = np.array([1], dtype=np.int64)
         else:
-            # 点が足りない場合は空にしておく
             boxes = np.empty((0, 4), dtype=np.float32)
             labels = np.empty((0,), dtype=np.int64)
 
         return boxes, labels
 
-        
     def __getitem__(self, idx):
-        # 1. 画像とPTSファイルのパス
-        # self.imgs には 'dataset/img001.jpg' のような相対パスが入っていることを想定
         img_path_full = self.imgs[idx]
-        
-        # rootからファイル名を抽出（img_listが絶対パスの場合、ここではファイル名だけ抽出する）
         img_filename = os.path.basename(img_path_full)
         base_name = os.path.splitext(img_filename)[0]
-        pts_filename = base_name + ".pts"
-        
-        # .ptsファイルのパスを作成
-        pts_path = os.path.join(self.root, pts_filename)
+        pts_path = os.path.join(self.root, base_name + ".pts")
 
-        """"
-        # 2. データ読み込み
-        img = Image.open(img_path_full).convert("RGB") # 👈 修正: img_path_fullを使用
+        # --- 画像読み込み (OpenCVでBGR→RGB変換)
+        img = cv2.imread(img_path_full)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        H, W, _ = img.shape
+
+        # --- BBox取得
         boxes_np, labels_np = self._parse_pts(pts_path)
 
-        # 3. ターゲット辞書の作成（RetinaNetの要求形式）
+        # --- データ拡張 ---
+        if self.augment and boxes_np.size > 0:
+            x1, y1, x2, y2 = boxes_np[0]
+
+            # 1. 左右反転（確率50%）
+            if random.random() > 0.5:
+                img = cv2.flip(img, 1)
+                x1_new = W - x2
+                x2_new = W - x1
+                x1, x2 = x1_new, x2_new
+
+            boxes_np = np.array([[x1, y1, x2, y2]], dtype=np.float32)
+
+            # 2. 色変換（BBoxに影響しない）
+            pil_img = T.functional.to_pil_image(img)
+            img = self.color_transform(pil_img)
+            img = T.functional.to_tensor(img)  # PIL→Tensor
+        else:
+            img = self.to_tensor(img)
+
+        # --- ターゲット作成 ---
         if boxes_np.size == 0:
             boxes = torch.empty((0, 4), dtype=torch.float32)
             labels = torch.empty((0,), dtype=torch.int64)
         else:
             boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
             labels = torch.as_tensor(labels_np, dtype=torch.int64)
-        
-        target = {}
-        target["boxes"] = boxes
-        target["labels"] = labels
-        target["image_id"] = torch.tensor([idx])
-        
-        # 4. 変換（transforms）の適用
-        if self.transforms is not None:
-            img = self.transforms(img)
 
-        return img, target
-        """
-        # 2. データ読み込み
-        img = Image.open(img_path_full).convert("RGB")
-        boxes_np, labels_np = self._parse_pts(pts_path)
-
-        # 3. ターゲット辞書の作成と v2 形式への変換 👈 ここを修正
-
-        # 3-1. 画像のサイズを取得 (H, W) 224×224
-        W, H = img.size # PIL Imageのサイズは (W, H)
-
-        if boxes_np.size == 0:
-            # BBOXがない場合は空のテンソルを作成
-            boxes_tensor = torch.empty((0, 4), dtype=torch.float32)
-        else:
-            boxes_tensor = torch.as_tensor(boxes_np, dtype=torch.float32)
-
-        labels_tensor = torch.as_tensor(labels_np, dtype=torch.int64)
-
-        # 3-2. v2 形式の BoundingBoxes に変換
-        boxes_v2 = BoundingBoxes(
-            boxes_tensor, 
-            format="XYXY",  # あなたのデータ形式に合わせる
-            canvas_size=(H, W)
-        )
-        
-        target = {}
-        target["boxes"] = boxes_v2 # 👈 v2形式のBBOXを格納
-        target["labels"] = labels_tensor
-        target["image_id"] = torch.tensor([idx])
-        
-        # 4. 変換（transforms）の適用 👈 ターゲットも一緒に渡す
-        if self.transforms is not None:
-            # v2では、Transformsに画像とターゲットの両方を渡す
-            img, target = self.transforms(img, target) 
-
-        # 変換後、target["boxes"] は BoundingBoxes オブジェクトのままなので、
-        # そのままRetinaNetに渡すことができます。
+        target = {
+            "boxes": boxes,
+            "labels": labels,
+            "image_id": torch.tensor([idx])
+        }
 
         return img, target
 
     def __len__(self):
         return len(self.imgs)
-
-# Transformsの定義 データ拡張
-"""""
-def get_transform(train):
-    transforms = []
-    transforms.append(T.ToTensor())
-    if train:
-        transforms.append(T.RandomHorizontalFlip(0.5))
-        transforms.append(T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2))
-    return T.Compose(transforms)
-"""
-
-# Transformsの定義 データ拡張をv2に置き換える
-def get_transform(train):
-    transforms = []
-    # v2のToTensor()を使用: PIL Image/NumPy array -> Tensorに変換
-    transforms.append(T_v2.ToTensor()) 
-    
-    if train:
-        # v2のRandomHorizontalFlipを使用: BBOXも自動でフリップされる
-        transforms.append(T_v2.RandomHorizontalFlip(0.5))
-        # v2のColorJitterを使用
-        transforms.append(T_v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2))
-        
-    # T.ComposeではなくT_v2.Composeを使用
-    return T_v2.Compose(transforms)
 
 
 # Collate Functionの定義
@@ -256,7 +207,7 @@ backbone_fpn = _resnet_fpn_extractor(
 
 # ダミー画像をFPNに通して出力層の構造を確認
 with torch.no_grad():
-    dummy_image = torch.rand(1, 3, 224, 224)  # バッチサイズ1
+    dummy_image = torch.rand(1, 3, 224, 224)  # バッチサイズ1 RGBの3
     features = backbone_fpn(dummy_image)
     print("FPN 出力層のキー:", list(features.keys()))
     print("各層の出力形状:")
