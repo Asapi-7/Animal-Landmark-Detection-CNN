@@ -253,6 +253,13 @@ optimizer = optim.SGD(
     weight_decay=0.001
 )
 
+# スケジューラー
+scheduler = torch.optim.lr_scheduler.StepLR(
+    optimizer,
+    step_size=5,
+    gamma=0.1
+)
+
 # 評価関数
 def evaluate_retinanet(model, dataloader, device, iou_threshold=0.5):
     """
@@ -352,6 +359,13 @@ for epoch in range(num_epochs):
             print(f"Step {step}, Total Loss: {losses.item():.4f}, "
                   f"Cls Loss: {loss_dict['classification'].item():.4f}, "
                   f"Box Loss: {loss_dict['bbox_regression'].item():.4f}")
+            
+    # 学習率の出力
+    current_lr = optimizer.param_groups[0]["lr"]
+    tqdm.write(f"LR: {current_lr:.6f}")
+    
+    # スケジューラーステップ：学習率を調整
+    scheduler.step()
 
     print(f"--- Epoch {epoch+1} 完了: 平均損失 {total_epoch_loss/len(train_loader):.4f} ---")
 

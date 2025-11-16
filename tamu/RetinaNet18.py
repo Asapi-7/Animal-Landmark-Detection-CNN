@@ -12,6 +12,8 @@ from torch.utils.data import Dataset # データセットの定義と使用
 from torch.utils.data import DataLoader # データローダーの定義と使用
 from torchvision import transforms as T # 画像変換(Tensorに)
 from torchvision.ops import box_iou # IoUの計算(IoU：)
+import torchvision.transforms.v2 as T_v2 # 一貫性を持たせられる
+from torchvision.tv_tensors import BoundingBoxes, Mask, Image as TVImage # 二つのデータを同期させられる
 
 # モデル構築用
 from resnet18_backbone import resnet18 # ResNet18のバックボーン
@@ -25,6 +27,7 @@ import torch.nn.functional as F
 # データ
 from sklearn.model_selection import train_test_split # データ分割用
 from PIL import Image # 画像ファイルの読み込みとRBG変換
+import random # データ拡張
 
 
 # データセットを整えるクラス
@@ -89,7 +92,39 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
 
         # データ読み込み
         img = Image.open(img_path_full).convert("RGB") # 画像をRGB形式で読み込む
-        boxes_np, labels_np = self._parse_pts(pts_path) # .ptsファイルからバウンディングボックスとラベルをNumpy配列で取得
+        W, H = self._parse_pts(pts_path) # .ptsファイルからバウンディングボックスとラベルをNumpy配列で取得
+
+        # BBox読み込み
+        boxes_np, labels_np = self._parse_pts(pts_path)
+
+        # データ拡張
+        if self.augment and boxes_np.size > 0:
+
+            x1, y1, x2, y2 = boxes_np[0]
+            
+            # 左右反転
+            if random.random() > 0.5:
+                img = T.functional.hflip(img)  # PIL の左右反転
+
+                # BBox も左右反転
+                x1_new = W - x2
+                x2_new = W - x1
+                x1, x2 = x1_new, x2_new
+
+            boxes_np = np.array([[x1, y1, x2, y2]], dtype=np.float32)
+
+            # 2色変換
+            img = self.color_transform(img)
+
+            # Tensor に変換
+            img = T.functional.to_tensor(img)
+
+        else:
+            # augment が無い場合画像変換の適用
+            if self.transforms is not None:
+                img = self.transforms(img) # 前処理を適用
+            else:
+                img = T.functional.to_tensor(img)
 
         # ターゲット辞書の作成
         if boxes_np.size == 0: # バウンディングボックスが空なら空のテンソルを作成
@@ -99,14 +134,11 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
             boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
             labels = torch.as_tensor(labels_np, dtype=torch.int64)
         
-        target = {} # ターゲット辞書の構築
-        target["boxes"] = boxes 
-        target["labels"] = labels
-        target["image_id"] = torch.tensor([idx])
-        
-        # 画像変換の適用
-        if self.transforms is not None:
-            img = self.transforms(img) # 前処理を適用
+        target = {
+            "boxes": boxes,
+            "labels": labels,
+            "image_id": torch.tensor([idx]),
+        } # ターゲット辞書の構築
 
         return img, target
     
@@ -173,8 +205,8 @@ custom_backbone = resnet18(pretrained=False) # ResNet18を使えるようにす�
 # FPNを構築するための設定
 out_channels = 256 # FPNの各出力マップのチャンネル数
 
-# FPNの作成
-class CustomFPN(nn.Module):
+# 特徴ピラミッドネットワーク(FPN)の作成
+class FeaturePyramidNetwork(nn.Module):
     def __init__(self, in_channels_list, out_channels): # チャネル＝経路
         super().__init__()
         self.lateral_convs = nn.ModuleList([
@@ -216,9 +248,11 @@ class BackboneWithFPN(nn.Module):
         c3, c4, c5 = self.body(x)  # 自作ResNetが中間特徴を返すように設計
         return self.fpn([c3, c4, c5])
 
-fpn = CustomFPN(in_channels_list=[128, 256, 512], out_channels=256) #自作FPNを適用する
+fpn = FeaturePyramidNetwork(in_channels_list=[128, 256, 512], out_channels=256) #自作FPNを適用する
 
 backbone = BackboneWithFPN(custom_backbone, fpn,out_channels=256) # ResNet + FPN を統合
+
+
 
 """"
 torchvisionの内部関数
@@ -229,10 +263,25 @@ backbone_fpn = _resnet_fpn_extractor(
 )
 """
 
+# ダミー画像をFPNに通して出力層の構造を確認
+with torch.no_grad():
+    dummy_image = torch.rand(1, 3, 224, 224)  # バッチサイズ1 RGBの3
+    features = backbone(dummy_image)
+    print("FPN 出力層のキー:", list(features.keys()))
+    print("各層の出力形状:")
+    for k, v in features.items():
+        print(f"  {k}: {tuple(v.shape)}")
+
+num_feature_maps = len(features)
+print("FPN 出力層数:", num_feature_maps)
+
 # アンカー生成器の定義 (候補領域の作成)
+sizes=[8, 16, 32, 64, 128, 224] # アンカーのサイズ
+sizes_for_anchor = tuple((s,) for s in sizes[:num_feature_maps]) 
+
 anchor_generator = AnchorGenerator(
-    sizes=((32,), (64,), (128,), (256,), (512,), (1024,)), # アンカーのサイズ
-    aspect_ratios=((0.5, 1.0, 2.0),) * 6 # 縦横比
+    sizes=sizes_for_anchor,
+    aspect_ratios=((0.5, 1.0, 2.0),) * num_feature_maps
 )
 
 
@@ -356,7 +405,7 @@ for epoch in range(num_epochs):
         # オプティマイザのステップ: 重みを更新
         optimizer.step() 
         
-    end_time = time.time()
+    #end_time = time.time()
     tqdm.write(f"--- Epoch [{epoch}/{num_epochs}] 完了。 平均損失: {total_epoch_loss / len(train_loader):.4f}s ---")
 
 # モデルの重みを保存
