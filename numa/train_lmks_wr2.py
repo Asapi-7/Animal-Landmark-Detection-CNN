@@ -1,6 +1,3 @@
-# =================================================================
-# 0. 必要なライブラリのインポート
-# =================================================================
 import os
 import torch
 import torch.nn as nn
@@ -13,15 +10,15 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import numpy as np 
 
-# ターゲットサイズ (データセット作成コードと合わせる)
+
 IMG_SIZE = 224
 NUM_LANDMARKS = 9
 
-# =================================================================
-# 1. ランドマーク座標 (.pts) の読み込み関数
-# =================================================================
+
+#ランドマーク座標 (.pts) の読み込み関数
+
 def load_landmarks_from_pts_to_tensor(pts_path):
-    """ .ptsファイルから9点のランドマーク座標を読み込み、平坦化されたTensor [18] で返す """
+    
     points = []
     with open(pts_path, 'r') as f:
         lines = f.readlines()
@@ -32,31 +29,27 @@ def load_landmarks_from_pts_to_tensor(pts_path):
             start_index = i + 1
             break
             
-    # 9点分を抽出
+    # 9点を抽出
     for line in lines[start_index : start_index + 9]:
         try:
             x, y = map(float, line.strip().split())
-            points.extend([x, y]) # [x1, y1, x2, y2, ...] の順 (18要素)
+            points.extend([x, y]) 
         except ValueError:
-             # 不正な行は無視
-             continue
+            continue
 
     if len(points) != 18:
-          raise ValueError(f"Expected 18 coordinates (9 points), but found {len(points)} in {pts_path}")
+        raise ValueError(f"Expected 18 coordinates (9 points), but found {len(points)} in {pts_path}")
 
     return torch.tensor(points, dtype=torch.float32)
 
-# =================================================================
-# 2. PyTorch Dataset クラス
-# =================================================================
+
 class LandmarkDataset(Dataset):
     def __init__(self, file_paths):
         self.image_files = file_paths
 
-        # モデルへの入力に合わせた最終的な画像変換 (正規化)
+        #正規化
         self.transform = transforms.Compose([
-            transforms.ToTensor(), # HWC -> CHW, 0-255 -> 0-1
-            # ImageNetの統計値で標準化
+            transforms.ToTensor(), 
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
@@ -66,83 +59,83 @@ class LandmarkDataset(Dataset):
     def __getitem__(self, idx):
         img_path = self.image_files[idx]
         
-        # .pts ファイルパスを .jpg パスから構築
         pts_path = img_path.replace(".jpg", ".pts") 
 
-        # 訓練用画像 (正規化済み)
-        image = Image.open(img_path).convert("RGB") # 画像をRGBで読み込み
-        transformed_image = self.transform(image) # 変換と正規化を実行
+        # 訓練用画像
+        image = Image.open(img_path).convert("RGB") #
+        transformed_image = self.transform(image) # 変換と正規化
 
-        landmarks = load_landmarks_from_pts_to_tensor(pts_path) # 座標 [18] を読み込み
+        landmarks = load_landmarks_from_pts_to_tensor(pts_path) # 座標読み込み
 
         # 推論・描画のために元の画像パスも返す
         return transformed_image, landmarks, img_path 
 
-# =================================================================
-# 3. モデル定義 (Wide ResNet に修正)
-# =================================================================
-
+    
 class WideBasicBlock(nn.Module):
-    '''
-    Wide ResNetにおける残差ブロック
-    widen_factorによってチャネル幅が拡張される
-    '''
-    def __init__(self, in_channels: int, out_channels: int, stride: int=1, widen_factor: int=1):
+    # Wide ResNetにおける残差ブロック
+    # widen_factorによってチャネル幅が拡張される
+    # dropout_rateを引数に追加
+    def __init__(self, in_channels: int, out_channels: int, stride: int=1, widen_factor: int=1, dropout_rate: float=0.0):
         super().__init__()
         
-        # Wide化された中間チャネル数を計算 (WideResNetの核となる変更点)
+        # Wide化された中間チャネル数を計算 
         internal_channels = out_channels * widen_factor
 
-        # 畳み込み層の in_channels/out_channels を変更
         self.conv1 = nn.Conv2d(in_channels, internal_channels,
-                               kernel_size=3, stride=stride, padding=1, bias=False)
+                                 kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(internal_channels)
         self.relu = nn.ReLU(inplace=True)
         
-        self.conv2 = nn.Conv2d(internal_channels, out_channels, # out_channelsに戻す
-                               kernel_size=3, padding=1, bias=False)
+        # ドロップアウト層の追加
+        self.dropout = nn.Dropout(p=dropout_rate) # ドロップアウト率を設定
+        
+        self.conv2 = nn.Conv2d(internal_channels, out_channels, 
+                                 kernel_size=3, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(out_channels)
 
-        # スキップ接続のダウンサンプリング (寸法合わせ)
         self.downsample = None
         if stride != 1 or in_channels != out_channels:
-             self.downsample = nn.Sequential(
-                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-                 nn.BatchNorm2d(out_channels)
-             )
+            self.downsample = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
     
     def forward(self, x: torch.Tensor):
         identity = x
+        # 1つ目の畳み込み層
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
+        
+        # ドロップアウト層の適用
+        out = self.dropout(out) # 2つ目の畳み込み層の前にドロップアウトを挿入
+        
+        # 2つ目の畳み込み層
         out = self.conv2(out)
         out = self.bn2(out)
         
         if self.downsample is not None:
-             identity = self.downsample(identity)
-             
+            identity = self.downsample(identity)
+            
         out += identity
         out = self.relu(out)
         return out
 
 class WideResNet(nn.Module):
-    '''
-    Wide ResNetモデル (深さと広さをハイパーパラメータとして持つ)
-    '''
-    def __init__(self, depth: int, widen_factor: int, num_classes: int):
+    
+    # dropout_rateを引数に追加
+    def __init__(self, depth: int, widen_factor: int, num_classes: int, dropout_rate: float=0.0):
         super().__init__()
         
-        # WideResNetのブロック数計算 (例: depth=18の場合 n=2)
+        # WideResNetのブロック数計算 
         if (depth - 4) % 6 != 0:
-            # ResNetのBottleneck構造ではないため、BasicBlockベースのResNet18(4+2*2*4=20層)を想定して、
-            # 6n+4 のチェックは省略し、ResNet18互換の構造を維持します。
-            # ただし、ブロック数 n=2 を固定とする
+            # ResNetのBottleneck構造ではないため、BasicBlockベースのResNet18(4+2*2*4=20層)を想定
             n = 2 
         else:
             n = (depth - 4) // 6 
 
-        self.in_channels = 64 # 初期チャネル数
+        self.in_channels = 64 
+        self.dropout_rate = dropout_rate # ドロップアウト率をインスタンス変数として保存
         
         # 最初の層とプーリング
         self.conv1 = nn.Conv2d(3, self.in_channels, kernel_size=7, stride=2, padding=3, bias=False)
@@ -150,28 +143,29 @@ class WideResNet(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.max_pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         
-        # 各レイヤーの出力チャネル数 (WRNではこの値がwiden_factor倍されて内部チャネルになる)
+        # 各レイヤーの出力チャネル数
         channels = [64, 128, 256, 512]
         
         # 各層の定義に _make_layer 関数を使用
         # BasicBlockをWideBasicBlockに置き換え、widen_factorを渡す
-        self.layer1 = self._make_layer(WideBasicBlock, channels[0], n, stride=1, widen_factor=widen_factor)
-        self.layer2 = self._make_layer(WideBasicBlock, channels[1], n, stride=2, widen_factor=widen_factor)
-        self.layer3 = self._make_layer(WideBasicBlock, channels[2], n, stride=2, widen_factor=widen_factor)
-        self.layer4 = self._make_layer(WideBasicBlock, channels[3], n, stride=2, widen_factor=widen_factor)
+        self.layer1 = self._make_layer(WideBasicBlock, channels[0], n, stride=1, widen_factor=widen_factor, dropout_rate=self.dropout_rate) # dropout_rateを渡す
+        self.layer2 = self._make_layer(WideBasicBlock, channels[1], n, stride=2, widen_factor=widen_factor, dropout_rate=self.dropout_rate) # dropout_rateを渡す
+        self.layer3 = self._make_layer(WideBasicBlock, channels[2], n, stride=2, widen_factor=widen_factor, dropout_rate=self.dropout_rate) # dropout_rateを渡す
+        self.layer4 = self._make_layer(WideBasicBlock, channels[3], n, stride=2, widen_factor=widen_factor, dropout_rate=self.dropout_rate) # dropout_rateを渡す
         
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.linear = nn.Linear(channels[-1], num_classes) # num_classesはここでは仮の値
 
-    def _make_layer(self, block, out_channels, num_blocks, stride, widen_factor):
+    # dropout_rateを引数に追加
+    def _make_layer(self, block, out_channels, num_blocks, stride, widen_factor, dropout_rate):
         layers = []
         # 各層の最初のブロックはストライドとチャネル変更を適用
-        layers.append(block(self.in_channels, out_channels, stride, widen_factor))
+        layers.append(block(self.in_channels, out_channels, stride, widen_factor, dropout_rate)) # dropout_rateを渡す
         self.in_channels = out_channels
         
-        # 残りのブロック
+        
         for _ in range(1, num_blocks):
-            layers.append(block(self.in_channels, out_channels, stride=1, widen_factor=widen_factor))
+            layers.append(block(self.in_channels, out_channels, stride=1, widen_factor=widen_factor, dropout_rate=dropout_rate)) # dropout_rateを渡す
         
         return nn.Sequential(*layers)
 
@@ -197,12 +191,12 @@ class WideResNet(nn.Module):
         return x
 
 class LandmarkRegressor(nn.Module):
-    # depth=18, widen_factor=2 をデフォルト値として追加
-    def __init__(self, num_landmarks=9, depth=18, widen_factor=2): 
+    # depth=18, widen_factor=2, dropout_rate=0.3 をデフォルト値として追加
+    def __init__(self, num_landmarks=9, depth=18, widen_factor=2, dropout_rate=0.3): 
         super(LandmarkRegressor, self).__init__()
         
-        # 1. Backbone: WideResNetを使用し、パラメータを渡す
-        self.backbone = WideResNet(depth=depth, widen_factor=widen_factor, num_classes=1000)
+        # 1. Backbone: WideResNetを使用し、パラメータとdropout_rateを渡す
+        self.backbone = WideResNet(depth=depth, widen_factor=widen_factor, num_classes=1000, dropout_rate=dropout_rate) # dropout_rateを渡す
         
         # 2. Head: Dense層 (最終層) の変更
         num_features = self.backbone.linear.in_features
@@ -213,44 +207,37 @@ class LandmarkRegressor(nn.Module):
     def forward(self, x):
         return self.backbone(x)
 
-# =================================================================
-# 4. 評価関数 (evaluate_model)
-# =================================================================
+# 評価関数
 def evaluate_model(model, data_loader, criterion, device):
-    """テストデータセットに対する損失を計算し、モデルの精度を確認する"""
     model.eval()
     total_loss = 0
     total_nme = 0
     count = 0
 
     with torch.no_grad():
-        # データローダーのイテレーションを imgs, labels のみに変更 (img_path は評価に使わないため)
+        
         for data in data_loader:
-             imgs, labels = data[0].to(device), data[1].to(device)
-             outputs = model(imgs)
+            imgs, labels = data[0].to(device), data[1].to(device)
+            outputs = model(imgs)
 
-             loss = criterion(outputs, labels)
-             total_loss += loss.item() * imgs.size(0)
+            loss = criterion(outputs, labels)
+            total_loss += loss.item() * imgs.size(0)
 
-             # --- NMEの計算と集計 ---
-             nme_batch = calculate_nme(outputs, labels, device)
-             total_nme += nme_batch.item() * imgs.size(0)
+            # NME
+            nme_batch = calculate_nme(outputs, labels, device)
+            total_nme += nme_batch.item() * imgs.size(0)
 
 
-             count += imgs.size(0)
+            count += imgs.size(0)
 
     avg_loss = total_loss / count
     avg_nme = total_nme / count
     return avg_loss, avg_nme
 
-# =================================================================
-# 4.1. NME (Normalized Mean Error) 計算関数
-# =================================================================
+# NME関数
 def calculate_normalization_factor(landmarks):
-    """ 
-    ランドマーク [N, 18] から、バウンディングボックスの対角線長を計算する。
-    """
-    # 座標を (N, 9, 2) に整形: (x1, y1, x2, y2, ...) -> ((x1, y1), (x2, y2), ...)
+    # ランドマーク [N, 18] から、バウンディングボックスの対角線長を計算する。
+    # 座標を (N, 9, 2) に整形
     coords = landmarks.reshape(-1, 9, 2)
     
     # バウンディングボックスの計算 (全点の min/max を使用)
@@ -259,7 +246,7 @@ def calculate_normalization_factor(landmarks):
     y_min = coords[..., 1].min(dim=1).values
     y_max = coords[..., 1].max(dim=1).values
     
-    # 対角線長の計算: sqrt((x_max - x_min)^2 + (y_max - y_min)^2)
+    # 対角線長の計算
     width = x_max - x_min
     height = y_max - y_min
     
@@ -271,7 +258,7 @@ def calculate_normalization_factor(landmarks):
 
 
 def calculate_nme(outputs, labels, device):
-    """ NME (Normalized Mean Error) を計算する """
+    # NME (Normalized Mean Error) を計算する
     num_landmarks = 9
     
     # 出力と正解を (N, 9, 2) に整形
@@ -293,11 +280,9 @@ def calculate_nme(outputs, labels, device):
 
     return nme
 
-# =================================================================
-# 5. 損失曲線プロット関数
-# =================================================================
+
 def plot_loss_curve(train_losses, test_losses, num_epochs):
-    """訓練損失とテスト損失の推移をプロットする"""
+    # 訓練損失とテスト損失の推移をプロットする
     plt.figure(figsize=(10, 6))
     plt.plot(range(1, num_epochs + 1), train_losses, label='Train Loss (MSE)', marker='o')
     if test_losses:
@@ -310,14 +295,9 @@ def plot_loss_curve(train_losses, test_losses, num_epochs):
     plt.grid(True)
     plt.show()
 
-# =================================================================
-# 6. ランドマーク描画ヘルパー関数 (PIL用)
-# =================================================================
+#ランドマーク描画
 def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
-    """
-    PIL Image にランドマークを描画し、インデックス (1-9) を付与する
-    （save_landmark_predictions 関数内で Matplotlib に置き換わるため、直接は使用されない）
-    """
+    
     draw = ImageDraw.Draw(image)
     
     try:
@@ -345,14 +325,9 @@ def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
         
     return image
 
-# =================================================================
-# 7. 予測結果を画像に描画して保存する関数 
-# =================================================================
+# 予測結果を画像に描画して保存する関数 
 def save_landmark_predictions(model, data_loader, device, num_samples=5, save_dir="./predictions_output"):
-    """
-    テストデータに対して推論を行い、予測されたランドマークを画像に描画して保存する
-    （Matplotlib を使用して、円と線も描画する）
-    """
+    # テストデータに対して推論を行い、予測されたランドマークを画像に描画して保存する
     model.eval()
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -400,7 +375,7 @@ def save_landmark_predictions(model, data_loader, device, num_samples=5, save_di
                 diameter12 = np.linalg.norm(p1 - p2)
                 radius12 = diameter12 / 2
                 circle12 = plt.Circle((center_x12, center_y12), radius12, 
-                                      color='red', fill=False, linewidth=2)
+                                     color='red', fill=False, linewidth=2)
                 ax.add_artist(circle12)
                 
                 # --- B. 3, 4個目の点を直径とする円 (赤色) の描画 ---
@@ -411,7 +386,7 @@ def save_landmark_predictions(model, data_loader, device, num_samples=5, save_di
                 diameter34 = np.linalg.norm(p3 - p4)
                 radius34 = diameter34 / 2
                 circle34 = plt.Circle((center_x34, center_y34), radius34, 
-                                      color='red', fill=False, linewidth=2)
+                                     color='red', fill=False, linewidth=2)
                 ax.add_artist(circle34)
 
                 # --- C. 6, 8, 7, 9, 6の順に直線をつなげた線 (赤色) の描画 ---
@@ -449,32 +424,31 @@ def save_landmark_predictions(model, data_loader, device, num_samples=5, save_di
                 print(f"✅ 予測画像を保存: {save_path}")
                 saved_count += 1
 
-# =================================================================
-# 8. メインの訓練関数 (train/test分割を含む)
-# =================================================================
+#訓練関数
 def train_model():
     # --- パラメータ設定 ---
     DATA_DIR = "./cropped_dataset" # 訓練データセットのパス
     TEST_SIZE = 0.2 # テストデータの割合 (20%)
-    BATCH_SIZE = 8 # CPU環境ではこの値を小さくすることを推奨 (例: 4や8)
+    BATCH_SIZE = 8 
     NUM_LANDMARKS = 9
-    NUM_EPOCHS = 20
+    NUM_EPOCHS = 10
     LEARNING_RATE = 0.001
     
     # --- WideResNet パラメータ設定 ---
     MODEL_DEPTH = 18 
     MODEL_WIDEN_FACTOR = 2 # Wide ResNetとして設定 (ResNet18の2倍の幅)
+    DROPOUT_RATE = 0.3 # Wide ResNetブロック内にドロップアウト率を設定
     
     # --- デバイス設定 ---
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f"訓練デバイス: {device}")
-    print(f"WideResNet設定: Depth={MODEL_DEPTH}, Widen Factor={MODEL_WIDEN_FACTOR}")
+    print(f"WideResNet設定: Depth={MODEL_DEPTH}, Widen Factor={MODEL_WIDEN_FACTOR}, Dropout Rate={DROPOUT_RATE}") # ドロップアウト率を表示
     
     # --- ファイルリストの取得と分割 (train/test分割) ---
     try:
         all_files = glob.glob(os.path.join(DATA_DIR, "*.jpg"))
         if not all_files:
-             raise FileNotFoundError("データセット内に.jpgファイルが見つかりません。")
+            raise FileNotFoundError("データセット内に.jpgファイルが見つかりません。")
         
         train_files, test_files = train_test_split(
             all_files, test_size=TEST_SIZE, random_state=42
@@ -492,17 +466,18 @@ def train_model():
     test_dataset = LandmarkDataset(test_files)
         
     train_loader = DataLoader(
-        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=1 
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2 
     )
     test_loader = DataLoader(
-        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=1 
+        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2 
     )
     
     # --- モデル、損失関数、最適化手法の設定 ---
     model = LandmarkRegressor(
         num_landmarks=NUM_LANDMARKS, 
         depth=MODEL_DEPTH, 
-        widen_factor=MODEL_WIDEN_FACTOR
+        widen_factor=MODEL_WIDEN_FACTOR,
+        dropout_rate=DROPOUT_RATE # dropout_rateを渡す
     )
     model.to(device)
     
@@ -546,7 +521,7 @@ def train_model():
     final_test_loss , final_test_nme = evaluate_model(model, test_loader, criterion, device)
     print(f"\n✅ Final Test Loss: {final_test_loss:.4f}, Final Test NME: {final_test_nme:.4f}")
 
-    MODEL_PATH_SAVE = 'landmark_regressor_wideresnet.pth' # モデル保存パスをWideResNet用に変更
+    MODEL_PATH_SAVE = 'landmark_regressor_wideresnet_dropout.pth' # モデル保存パスをWideResNet用に変更
     torch.save(model.state_dict(), MODEL_PATH_SAVE)
     print(f"モデルが '{MODEL_PATH_SAVE}' として保存されました。")
     
@@ -557,9 +532,7 @@ def train_model():
     # モデルとテストローダーを返して、後続の処理で利用できるようにする
     return model, test_loader, device 
 
-# =================================================================
-# 9. スクリプト実行
-# =================================================================
+
 if __name__ == '__main__':
     # 訓練を実行し、訓練済みモデルとテストローダーを取得
     trained_model, test_loader, device = train_model()
@@ -571,6 +544,6 @@ if __name__ == '__main__':
         data_loader=test_loader, 
         device=device, 
         num_samples=5, 
-        save_dir="./predictions_output_wrn" # 保存先ディレクトリをWRN用に変更
+        save_dir="./predictions_output_wrn_dropout" # 保存先ディレクトリをWRN用に変更
     )
     print("--- 予測ランドマークの描画と保存が完了しました。---")

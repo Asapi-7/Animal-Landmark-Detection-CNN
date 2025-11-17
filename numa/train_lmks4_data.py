@@ -1,11 +1,9 @@
-# =================================================================
-# 0. 必要なライブラリのインポート
-# =================================================================
 import os
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+from torchvision.transforms import functional as F 
 from PIL import Image, ImageDraw, ImageFont 
 import glob
 from sklearn.model_selection import train_test_split
@@ -13,15 +11,13 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import numpy as np 
 
-# ターゲットサイズ (データセット作成コードと合わせる)
+
 IMG_SIZE = 224
 NUM_LANDMARKS = 9
 
-# =================================================================
-# 1. ランドマーク座標 (.pts) の読み込み関数
-# =================================================================
+
+# ランドマーク座標 (.pts) の読み込み関数
 def load_landmarks_from_pts_to_tensor(pts_path):
-    """ .ptsファイルから9点のランドマーク座標を読み込み、平坦化されたTensor [18] で返す """
     points = []
     with open(pts_path, 'r') as f:
         lines = f.readlines()
@@ -36,144 +32,238 @@ def load_landmarks_from_pts_to_tensor(pts_path):
     for line in lines[start_index : start_index + 9]:
         try:
             x, y = map(float, line.strip().split())
-            points.extend([x, y]) # [x1, y1, x2, y2, ...] の順 (18要素)
+            points.extend([x, y]) 
         except ValueError:
-             # 不正な行は無視
-             continue
+            continue
 
     if len(points) != 18:
           raise ValueError(f"Expected 18 coordinates (9 points), but found {len(points)} in {pts_path}")
 
     return torch.tensor(points, dtype=torch.float32)
 
-# =================================================================
-# 2. PyTorch Dataset クラス
-# =================================================================
+
+#  幾何学的拡張クラス (座標変換を伴う) の定義
+class RandomAffineLandmarks:
+    def __init__(self, degrees, translate, scale_ranges, shear, W=IMG_SIZE):
+        self.W = W #画像の幅
+        self.degrees = degrees #degrees:回転角度
+        self.translate = translate  #translate:平行移動の比率
+        self.scale_ranges = scale_ranges #scale_ranges:拡大縮小率
+        self.shear = shear #せん断の角度
+        self.center = (W / 2, W / 2) # 画像の中心 
+
+    def get_params(self): #ランダムパラメータ生成
+        # 回転角度
+        angle = float(torch.empty(1).uniform_(float(self.degrees[0]), float(self.degrees[1])).item())
+        
+        # 平行移動のピクセル
+        max_dx = self.translate[0] * self.W
+        max_dy = self.translate[1] * self.W
+        translate = [
+            float(torch.empty(1).uniform_(-max_dx, max_dx).item()),
+            float(torch.empty(1).uniform_(-max_dy, max_dy).item())
+        ]
+
+        # 拡大縮小率
+        scale_factor = float(torch.empty(1).uniform_(self.scale_ranges[0], self.scale_ranges[1]).item())
+        
+        # せん断の角度
+        shear = [0.0, 0.0]
+        if self.shear is not None:
+            shear_x = float(torch.empty(1).uniform_(float(self.shear[0]), float(self.shear[1])).item())
+            shear = [shear_x, 0.0] 
+
+        return angle, translate, scale_factor, shear
+
+    def __call__(self, img, landmarks_tensor):
+        #パラメータ取得
+        angle, translate, scale_factor, shear = self.get_params()
+        #パラメータをもとに画像変換
+        img_transformed = F.affine(
+            img, angle=angle, translate=translate, scale=scale_factor, shear=shear, 
+            interpolation=Image.BICUBIC,  
+            fill=0                        
+        )
+        
+        # ランドマーク座標[x1,y1,x2,y2,...]の変換 
+        landmarks_reshaped = landmarks_tensor.reshape(-1, 2).double()
+        # 中心を(0, 0)に移動
+        landmarks_centered = landmarks_reshaped - torch.tensor(self.center, dtype=torch.float64)
+        # 回転を適用
+        angle_rad = np.deg2rad(angle)
+        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+        R = torch.tensor([[cos_a, -sin_a], [sin_a, cos_a]], dtype=torch.float64)
+        rotated_centered = landmarks_centered @ R.T
+        
+        # 拡大縮小を適用
+        scaled_centered = rotated_centered * scale_factor
+        
+        # 中心を元に戻す
+        rotated_landmarks = scaled_centered + torch.tensor(self.center, dtype=torch.float64)
+
+        # 平行移動を適用
+        translated_landmarks = rotated_landmarks + torch.tensor(translate, dtype=torch.float64)
+        
+        return img_transformed, translated_landmarks.flatten().float()
+
+
+class RandomHorizontalFlipWithLandmarks:
+    #水平反転とランドマーク座標変換
+    def __init__(self, p=0.5, W=IMG_SIZE):
+        self.p = p #水平反転を行う確率
+        self.W = W #画像の幅
+        # ランドマーク順序交換
+        self.point_swap_map = {0: 1, 1: 0, 2: 3, 3: 2, 5: 7, 7: 5} 
+
+    def __call__(self, img, landmarks_tensor):
+        if torch.rand(1) < self.p:
+            # 水平反転
+            img = transforms.functional.hflip(img)
+            
+            # 2. ランドマーク座標を反転
+            flipped_landmarks = landmarks_tensor.clone()
+            flipped_landmarks[::2] = self.W - flipped_landmarks[::2] #水平xのみ
+            
+            # ランドマーク順序交換
+            flipped_coords_reshaped = flipped_landmarks.reshape(-1, 2) 
+            new_coords = flipped_coords_reshaped.clone()
+            for original_idx, swap_idx in self.point_swap_map.items():
+                new_coords[swap_idx] = flipped_coords_reshaped[original_idx]
+            
+            return img, new_coords.flatten()
+        
+        return img, landmarks_tensor
+
+
+#データ拡張
 class LandmarkDataset(Dataset):
-    def __init__(self, file_paths):
-        self.image_files = file_paths
-
-        # モデルへの入力に合わせた最終的な画像変換 (正規化)
-        self.transform = transforms.Compose([
-            transforms.ToTensor(), # HWC -> CHW, 0-255 -> 0-1
-            # ImageNetの統計値で標準化
+    def __init__(self, file_paths, is_train=False): 
+        self.image_files = file_paths 
+        self.is_train = is_train #データセットが訓練用で使用されているか
+        #正規化
+        final_transforms = [
+            transforms.ToTensor(), 
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+        ]
+        
+        if is_train:
+            # 画素値拡張 
+            self.transform_tensor = transforms.Compose([
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2), # 色ジッター
+                transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0)),              # ガウシアンブラー
+            ] + final_transforms)
+            
+            # 幾何学的拡張
+            self.affine_transform = RandomAffineLandmarks(
+                degrees=(-10, 10), translate=(0.05, 0.05), # ランダム回転と平行移動
+                scale_ranges=(0.95, 1.05), shear=(-5, 5)   # 拡大縮小とシアー
+            )
+            self.hflip_transform = RandomHorizontalFlipWithLandmarks(p=0.5, W=IMG_SIZE)
+            
+        else: #テスト時は拡張なし
+            self.transform_tensor = transforms.Compose(final_transforms)
+            self.affine_transform = None
+            self.hflip_transform = None
 
-    def __len__(self):
+
+    def __len__(self): 
         return len(self.image_files)
 
     def __getitem__(self, idx):
         img_path = self.image_files[idx]
-        
-        # .pts ファイルパスを .jpg パスから構築
         pts_path = img_path.replace(".jpg", ".pts") 
 
-        # 訓練用画像 (正規化済み)
-        image = Image.open(img_path).convert("RGB") # 画像をRGBで読み込み
-        transformed_image = self.transform(image) # 変換と正規化を実行
+        image = Image.open(img_path).convert("RGB") 
+        landmarks = load_landmarks_from_pts_to_tensor(pts_path) 
 
-        landmarks = load_landmarks_from_pts_to_tensor(pts_path) # 座標 [18] を読み込み
+        # 幾何学的拡張の適用 
+        if self.is_train:
+            # ランダム水平反転
+            image, landmarks = self.hflip_transform(image, landmarks) 
+            # ランダムアフィン変換 (回転、平行移動、スケール、シアー)
+            image, landmarks = self.affine_transform(image, landmarks) 
+        
+        # 画素値拡張の適用
+        transformed_image = self.transform_tensor(image) 
 
-        # 推論・描画のために元の画像パスも返す
         return transformed_image, landmarks, img_path 
 
-# =================================================================
-# 3. モデル定義 (Wide ResNet に修正)
-# =================================================================
-
-class WideBasicBlock(nn.Module):
-    '''
-    Wide ResNetにおける残差ブロック
-    widen_factorによってチャネル幅が拡張される
-    '''
-    def __init__(self, in_channels: int, out_channels: int, stride: int=1, widen_factor: int=1):
+#Resnet18
+class BasicBlock(nn.Module): #残差ブロック
+    def __init__(self, in_channels: int, out_channels: int,
+                 stride: int=1):
         super().__init__()
-        
-        # Wide化された中間チャネル数を計算 (WideResNetの核となる変更点)
-        internal_channels = out_channels * widen_factor
 
-        # 畳み込み層の in_channels/out_channels を変更
-        self.conv1 = nn.Conv2d(in_channels, internal_channels,
-                               kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(internal_channels)
-        self.relu = nn.ReLU(inplace=True)
-        
-        self.conv2 = nn.Conv2d(internal_channels, out_channels, # out_channelsに戻す
+        self.conv1 = nn.Conv2d(in_channels, out_channels,
+                               kernel_size=3, stride=stride,
+                               padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels,
                                kernel_size=3, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
 
-        # スキップ接続のダウンサンプリング (寸法合わせ)
+        # スキップ接続
         self.downsample = None
         if stride != 1 or in_channels != out_channels:
              self.downsample = nn.Sequential(
-                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                 nn.Conv2d(in_channels, out_channels, kernel_size=1,
+                           stride=stride, bias=False),
                  nn.BatchNorm2d(out_channels)
              )
-    
+
+    #順伝播関数
     def forward(self, x: torch.Tensor):
-        identity = x
+        identity = x 
+
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
         out = self.conv2(out)
         out = self.bn2(out)
-        
+
         if self.downsample is not None:
              identity = self.downsample(identity)
-             
+
+        # 残差写像と恒等写像の要素毎の和を計算
         out += identity
+
         out = self.relu(out)
+
         return out
 
-class WideResNet(nn.Module):
-    '''
-    Wide ResNetモデル (深さと広さをハイパーパラメータとして持つ)
-    '''
-    def __init__(self, depth: int, widen_factor: int, num_classes: int):
+class ResNet18(nn.Module):
+    def __init__(self, num_classes: int):
         super().__init__()
-        
-        # WideResNetのブロック数計算 (例: depth=18の場合 n=2)
-        if (depth - 4) % 6 != 0:
-            # ResNetのBottleneck構造ではないため、BasicBlockベースのResNet18(4+2*2*4=20層)を想定して、
-            # 6n+4 のチェックは省略し、ResNet18互換の構造を維持します。
-            # ただし、ブロック数 n=2 を固定とする
-            n = 2 
-        else:
-            n = (depth - 4) // 6 
 
-        self.in_channels = 64 # 初期チャネル数
-        
-        # 最初の層とプーリング
-        self.conv1 = nn.Conv2d(3, self.in_channels, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = nn.BatchNorm2d(self.in_channels)
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2,
+                               padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
-        self.max_pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        
-        # 各レイヤーの出力チャネル数 (WRNではこの値がwiden_factor倍されて内部チャネルになる)
-        channels = [64, 128, 256, 512]
-        
-        # 各層の定義に _make_layer 関数を使用
-        # BasicBlockをWideBasicBlockに置き換え、widen_factorを渡す
-        self.layer1 = self._make_layer(WideBasicBlock, channels[0], n, stride=1, widen_factor=widen_factor)
-        self.layer2 = self._make_layer(WideBasicBlock, channels[1], n, stride=2, widen_factor=widen_factor)
-        self.layer3 = self._make_layer(WideBasicBlock, channels[2], n, stride=2, widen_factor=widen_factor)
-        self.layer4 = self._make_layer(WideBasicBlock, channels[3], n, stride=2, widen_factor=widen_factor)
-        
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.linear = nn.Linear(channels[-1], num_classes) # num_classesはここでは仮の値
 
-    def _make_layer(self, block, out_channels, num_blocks, stride, widen_factor):
-        layers = []
-        # 各層の最初のブロックはストライドとチャネル変更を適用
-        layers.append(block(self.in_channels, out_channels, stride, widen_factor))
-        self.in_channels = out_channels
-        
-        # 残りのブロック
-        for _ in range(1, num_blocks):
-            layers.append(block(self.in_channels, out_channels, stride=1, widen_factor=widen_factor))
-        
-        return nn.Sequential(*layers)
+        self.max_pool = nn.MaxPool2d(kernel_size=3,
+                                     stride=2, padding=1)
+
+        self.layer1 = nn.Sequential(
+            BasicBlock(64, 64),
+            BasicBlock(64, 64),
+        )
+        self.layer2 = nn.Sequential(
+            BasicBlock(64, 128, stride=2),
+            BasicBlock(128, 128),
+        )
+        self.layer3 = nn.Sequential(
+            BasicBlock(128, 256, stride=2),
+            BasicBlock(256, 256),
+        )
+        self.layer4 = nn.Sequential(
+            BasicBlock(256, 512, stride=2),
+            BasicBlock(512, 512),
+        )
+
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+
+        self.linear = nn.Linear(512, num_classes)
 
     def forward(self, x: torch.Tensor, return_embed: bool=False):
         x = self.conv1(x)
@@ -197,12 +287,11 @@ class WideResNet(nn.Module):
         return x
 
 class LandmarkRegressor(nn.Module):
-    # depth=18, widen_factor=2 をデフォルト値として追加
-    def __init__(self, num_landmarks=9, depth=18, widen_factor=2): 
+    def __init__(self, num_landmarks=9):
         super(LandmarkRegressor, self).__init__()
         
-        # 1. Backbone: WideResNetを使用し、パラメータを渡す
-        self.backbone = WideResNet(depth=depth, widen_factor=widen_factor, num_classes=1000)
+        # 1. Backbone:ResNet18を使用
+        self.backbone = ResNet18(num_classes=1000)
         
         # 2. Head: Dense層 (最終層) の変更
         num_features = self.backbone.linear.in_features
@@ -213,18 +302,14 @@ class LandmarkRegressor(nn.Module):
     def forward(self, x):
         return self.backbone(x)
 
-# =================================================================
-# 4. 評価関数 (evaluate_model)
-# =================================================================
+#評価関数
 def evaluate_model(model, data_loader, criterion, device):
-    """テストデータセットに対する損失を計算し、モデルの精度を確認する"""
     model.eval()
     total_loss = 0
     total_nme = 0
     count = 0
 
     with torch.no_grad():
-        # データローダーのイテレーションを imgs, labels のみに変更 (img_path は評価に使わないため)
         for data in data_loader:
              imgs, labels = data[0].to(device), data[1].to(device)
              outputs = model(imgs)
@@ -232,7 +317,6 @@ def evaluate_model(model, data_loader, criterion, device):
              loss = criterion(outputs, labels)
              total_loss += loss.item() * imgs.size(0)
 
-             # --- NMEの計算と集計 ---
              nme_batch = calculate_nme(outputs, labels, device)
              total_nme += nme_batch.item() * imgs.size(0)
 
@@ -243,13 +327,10 @@ def evaluate_model(model, data_loader, criterion, device):
     avg_nme = total_nme / count
     return avg_loss, avg_nme
 
-# =================================================================
-# 4.1. NME (Normalized Mean Error) 計算関数
-# =================================================================
-def calculate_normalization_factor(landmarks):
-    """ 
-    ランドマーク [N, 18] から、バウンディングボックスの対角線長を計算する。
-    """
+#NME
+def calculate_normalization_factor(landmarks): 
+    #ランドマーク [N, 18] から、バウンディングボックスの対角線長を計算する。
+    
     # 座標を (N, 9, 2) に整形: (x1, y1, x2, y2, ...) -> ((x1, y1), (x2, y2), ...)
     coords = landmarks.reshape(-1, 9, 2)
     
@@ -271,7 +352,7 @@ def calculate_normalization_factor(landmarks):
 
 
 def calculate_nme(outputs, labels, device):
-    """ NME (Normalized Mean Error) を計算する """
+    # NME (Normalized Mean Error) を計算する 
     num_landmarks = 9
     
     # 出力と正解を (N, 9, 2) に整形
@@ -288,16 +369,13 @@ def calculate_nme(outputs, labels, device):
     # unsqueeze(1) で [N] -> [N, 1] にしてブロードキャストを可能にする
     normalized_distances = distances / normalization_factors.unsqueeze(1) # [N, 9]
 
-    # 4. 全ての正規化距離の平均を取る (これが NME)
+    # 4. 全ての正規化距離の平均を取る 
     nme = normalized_distances.mean()
 
     return nme
 
-# =================================================================
-# 5. 損失曲線プロット関数
-# =================================================================
+#損失曲線
 def plot_loss_curve(train_losses, test_losses, num_epochs):
-    """訓練損失とテスト損失の推移をプロットする"""
     plt.figure(figsize=(10, 6))
     plt.plot(range(1, num_epochs + 1), train_losses, label='Train Loss (MSE)', marker='o')
     if test_losses:
@@ -310,14 +388,8 @@ def plot_loss_curve(train_losses, test_losses, num_epochs):
     plt.grid(True)
     plt.show()
 
-# =================================================================
-# 6. ランドマーク描画ヘルパー関数 (PIL用)
-# =================================================================
+#ランドマーク描画
 def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
-    """
-    PIL Image にランドマークを描画し、インデックス (1-9) を付与する
-    （save_landmark_predictions 関数内で Matplotlib に置き換わるため、直接は使用されない）
-    """
     draw = ImageDraw.Draw(image)
     
     try:
@@ -345,14 +417,8 @@ def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
         
     return image
 
-# =================================================================
-# 7. 予測結果を画像に描画して保存する関数 
-# =================================================================
+#予測結果を画像に描画
 def save_landmark_predictions(model, data_loader, device, num_samples=5, save_dir="./predictions_output"):
-    """
-    テストデータに対して推論を行い、予測されたランドマークを画像に描画して保存する
-    （Matplotlib を使用して、円と線も描画する）
-    """
     model.eval()
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -365,34 +431,31 @@ def save_landmark_predictions(model, data_loader, device, num_samples=5, save_di
                 break
                 
             images_tensor = images.to(device)
-            outputs = model(images_tensor).cpu() # 推論結果をCPUに戻す
+            outputs = model(images_tensor).cpu() 
 
             for i in range(images_tensor.size(0)):
                 if saved_count >= num_samples:
                     break
                     
-                # 1. 元の画像の読み込み
+                # 元の画像の読み込み
                 original_img_path = img_paths[i]
                 original_image_pil = Image.open(original_img_path).convert("RGB")
                 
-                # 2. 予測されたランドマーク座標を取得 (NumPy配列)
-                predicted_landmarks_flat = outputs[i].numpy() # [x1,y1,x2,y2,...]
-                predicted_landmarks_reshaped = predicted_landmarks_flat.reshape(-1, 2) # (9, 2)
+                predicted_landmarks_flat = outputs[i].numpy() 
+                predicted_landmarks_reshaped = predicted_landmarks_flat.reshape(-1, 2) 
 
-                # --- Matplotlibで描画 ---
                 fig, ax = plt.subplots(figsize=(8, 8))
                 ax.imshow(original_image_pil)
                 
                 # 予測座標を元の画像サイズにスケーリング
                 original_w, original_h = original_image_pil.size
                 
-                # IMG_SIZE はモデルの入力サイズ（224）
                 scaled_landmarks_x = predicted_landmarks_reshaped[:, 0] * (original_w / IMG_SIZE)
                 scaled_landmarks_y = predicted_landmarks_reshaped[:, 1] * (original_h / IMG_SIZE)
                 
-                scaled_landmarks = np.stack([scaled_landmarks_x, scaled_landmarks_y], axis=1) # (9, 2) の形式に再構成
+                scaled_landmarks = np.stack([scaled_landmarks_x, scaled_landmarks_y], axis=1) 
 
-                # --- A. 1, 2個目の点を直径とする円 (赤色) の描画 ---
+                # 1, 2個目の点を直径とする円 (赤色) の描画
                 p1 = scaled_landmarks[0]
                 p2 = scaled_landmarks[1]
                 center_x12 = (p1[0] + p2[0]) / 2
@@ -400,10 +463,10 @@ def save_landmark_predictions(model, data_loader, device, num_samples=5, save_di
                 diameter12 = np.linalg.norm(p1 - p2)
                 radius12 = diameter12 / 2
                 circle12 = plt.Circle((center_x12, center_y12), radius12, 
-                                      color='red', fill=False, linewidth=2)
+                                     color='red', fill=False, linewidth=2)
                 ax.add_artist(circle12)
                 
-                # --- B. 3, 4個目の点を直径とする円 (赤色) の描画 ---
+                # 3, 4個目の点を直径とする円 (赤色) の描画 
                 p3 = scaled_landmarks[2]
                 p4 = scaled_landmarks[3]
                 center_x34 = (p3[0] + p4[0]) / 2
@@ -411,66 +474,55 @@ def save_landmark_predictions(model, data_loader, device, num_samples=5, save_di
                 diameter34 = np.linalg.norm(p3 - p4)
                 radius34 = diameter34 / 2
                 circle34 = plt.Circle((center_x34, center_y34), radius34, 
-                                      color='red', fill=False, linewidth=2)
+                                     color='red', fill=False, linewidth=2)
                 ax.add_artist(circle34)
 
-                # --- C. 6, 8, 7, 9, 6の順に直線をつなげた線 (赤色) の描画 ---
-                # インデックスは 0 から始まるため、(6, 8, 7, 9, 6) -> [5, 7, 6, 8, 5]
+                
                 indices = [5, 7, 6, 8, 5] 
                 line_x = scaled_landmarks_x[indices]
                 line_y = scaled_landmarks_y[indices]
                 ax.plot(line_x, line_y, color='red', linestyle='-', linewidth=2)
 
-                # --- ランドマーク点を描画 ---
+                # ランドマーク点を描画 
                 ax.scatter(scaled_landmarks_x, scaled_landmarks_y, 
-                            c='red', marker='o', s=50, label=None)
+                           c='red', marker='o', s=50, label=None)
                 
-                # --- ランドマークに番号を振る ---
-                for k_idx in range(NUM_LANDMARKS): # NUM_LANDMARKSは9
+                # ランドマークに番号表示
+                for k_idx in range(NUM_LANDMARKS): 
                     tmp = 10
-                    # 影/枠線 (黒)
                     ax.annotate(str(k_idx+1), (scaled_landmarks_x[k_idx] + tmp + 1, scaled_landmarks_y[k_idx] + tmp + 1), color='black', fontsize=20, ha='center', va='center')
                     ax.annotate(str(k_idx+1), (scaled_landmarks_x[k_idx] + tmp + 3, scaled_landmarks_y[k_idx] + tmp + 1), color='black', fontsize=20, ha='center', va='center')
                     ax.annotate(str(k_idx+1), (scaled_landmarks_x[k_idx] + tmp + 1, scaled_landmarks_y[k_idx] + tmp + 3), color='black', fontsize=20, ha='center', va='center')
                     ax.annotate(str(k_idx+1), (scaled_landmarks_x[k_idx] + tmp + 3, scaled_landmarks_y[k_idx] + tmp + 3), color='black', fontsize=20, ha='center', va='center')
-                    # 実際の文字 (黄色)
                     ax.annotate(str(k_idx+1), (scaled_landmarks_x[k_idx] + tmp + 2, scaled_landmarks_y[k_idx] + tmp + 2), color='yellow', fontsize=20, ha='center', va='center')
 
 
                 ax.set_title(f"Predicted Landmarks (Sample {saved_count+1})")
-                ax.axis('off') # 軸を非表示に
+                ax.axis('off')
                 
-                # --- ファイル保存 ---
+               
                 base_name = os.path.basename(original_img_path)
                 save_path = os.path.join(save_dir, f"pred_geometric_{base_name}")
-                plt.savefig(save_path, bbox_inches='tight', pad_inches=0) # 余白なしで保存
-                plt.close(fig) # 現在の図を閉じてメモリを解放
+                plt.savefig(save_path, bbox_inches='tight', pad_inches=0) 
+                plt.close(fig) 
                 
-                print(f"✅ 予測画像を保存: {save_path}")
+                print(f"予測画像を保存: {save_path}")
                 saved_count += 1
 
-# =================================================================
-# 8. メインの訓練関数 (train/test分割を含む)
-# =================================================================
+
 def train_model():
-    # --- パラメータ設定 ---
     DATA_DIR = "./cropped_dataset" # 訓練データセットのパス
     TEST_SIZE = 0.2 # テストデータの割合 (20%)
-    BATCH_SIZE = 8 # CPU環境ではこの値を小さくすることを推奨 (例: 4や8)
+    BATCH_SIZE = 32
     NUM_LANDMARKS = 9
     NUM_EPOCHS = 20
     LEARNING_RATE = 0.001
     
-    # --- WideResNet パラメータ設定 ---
-    MODEL_DEPTH = 18 
-    MODEL_WIDEN_FACTOR = 2 # Wide ResNetとして設定 (ResNet18の2倍の幅)
-    
-    # --- デバイス設定 ---
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+  
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"訓練デバイス: {device}")
-    print(f"WideResNet設定: Depth={MODEL_DEPTH}, Widen Factor={MODEL_WIDEN_FACTOR}")
     
-    # --- ファイルリストの取得と分割 (train/test分割) ---
+    
     try:
         all_files = glob.glob(os.path.join(DATA_DIR, "*.jpg"))
         if not all_files:
@@ -487,41 +539,53 @@ def train_model():
         print("cropped_dataset フォルダが./ (カレントディレクトリ) に存在し、データが揃っているか確認してください。")
         return
     
-    # --- データローダーの準備 ---
-    train_dataset = LandmarkDataset(train_files)
-    test_dataset = LandmarkDataset(test_files)
+   
+    train_dataset = LandmarkDataset(train_files, is_train=True) 
+  
+    test_dataset = LandmarkDataset(test_files, is_train=False) 
         
     train_loader = DataLoader(
-        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=1 
-    )
-    test_loader = DataLoader(
-        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=1 
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4
     )
     
-    # --- モデル、損失関数、最適化手法の設定 ---
-    model = LandmarkRegressor(
-        num_landmarks=NUM_LANDMARKS, 
-        depth=MODEL_DEPTH, 
-        widen_factor=MODEL_WIDEN_FACTOR
+    test_loader = DataLoader(
+        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4 
     )
+    
+    model = LandmarkRegressor(num_landmarks=NUM_LANDMARKS)
     model.to(device)
     
     criterion = nn.MSELoss() 
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     
-    # --- 損失記録用のリスト ---
+    # 記録用リスト 
     train_losses = []
     test_losses = []
+
+    train_nmes = []
+    test_nmes = [] 
     
-    # --- 訓練ループ ---
+    # 4つの値を保存するためのログファイル
+    TRAIN_LOG_FILE = os.path.join(os.getcwd(), 'training_evaluation_log.txt')
+    
+    # 古いログをクリアし、ヘッダーを書き込む
+    if os.path.exists(TRAIN_LOG_FILE):
+        os.remove(TRAIN_LOG_FILE)
+    
+    with open(TRAIN_LOG_FILE, 'w') as f:
+        # ヘッダー行を記述
+        f.write("Epoch,Train_Loss(MSE),Train_NME,Test_Loss(MSE),Test_NME\n")
+        
+    print(f"訓練・評価ログファイルを準備中: {TRAIN_LOG_FILE}")
+
+    # 訓練ループ 
     print("\n--- 訓練開始 ---")
     
     for epoch in range(NUM_EPOCHS):
-        model.train() # 訓練モード
+        model.train() 
         running_loss = 0.0
         
-        # tqdm を使用して進捗バーを表示
-        # データローダーから images, targets, img_paths を受け取る
+        # 進捗表示
         for i, (images, targets, _) in enumerate(tqdm(train_loader, desc=f"Epoch [{epoch+1}/{NUM_EPOCHS}]")):
             images = images.to(device)
             targets = targets.to(device)
@@ -536,30 +600,36 @@ def train_model():
         avg_train_loss = running_loss / len(train_loader)
         train_losses.append(avg_train_loss)
         
-        # --- テストデータでの評価 ---
+        # 訓練データでの評価（NMEを計算）
+        train_loss_epoch, train_nme_epoch = evaluate_model(model, train_loader, criterion, device)
+        train_nmes.append(train_nme_epoch)
+        
+        #テストデータでの評価 
         test_loss, test_nme = evaluate_model(model, test_loader, criterion, device)
         test_losses.append(test_loss)
+        test_nmes.append(test_nme) 
+
+        log_line = f"Epoch {epoch+1}/{NUM_EPOCHS}: Test NME = {test_nme:.6f}\n"
+        with open(NME_LOG_FILE, 'a') as f:
+            f.write(log_line)
         
-        print(f"--- Epoch [{epoch+1}/{NUM_EPOCHS}] 完了. Train Loss: {avg_train_loss:.4f}, Test Loss: {test_loss:.4f}, Test NME: {test_nme:.4f} ---")
+        print(f"--- Epoch [{epoch+1}/{NUM_EPOCHS}] 完了. Train Loss: {avg_train_loss:.4f}, Train NME: {train_nme_epoch:.4f}, Test Loss: {test_loss:.4f}, Test NME: {test_nme:.4f} ---")
 
-    # --- 最終評価とモデルの保存 ---
+    # 最終評価とモデルの保存 
     final_test_loss , final_test_nme = evaluate_model(model, test_loader, criterion, device)
-    print(f"\n✅ Final Test Loss: {final_test_loss:.4f}, Final Test NME: {final_test_nme:.4f}")
+    print(f"\n Final Test Loss: {final_test_loss:.4f}, Final Test NME: {final_test_nme:.4f}")
 
-    MODEL_PATH_SAVE = 'landmark_regressor_wideresnet.pth' # モデル保存パスをWideResNet用に変更
+    MODEL_PATH_SAVE = 'landmark_regressor_final_2.pth' 
     torch.save(model.state_dict(), MODEL_PATH_SAVE)
     print(f"モデルが '{MODEL_PATH_SAVE}' として保存されました。")
     
-    # --- 学習曲線のプロット ---
     print("\n--- 学習曲線を表示 ---")
     plot_loss_curve(train_losses, test_losses, NUM_EPOCHS)
     
-    # モデルとテストローダーを返して、後続の処理で利用できるようにする
-    return model, test_loader, device 
+    return model, test_loader, device
 
-# =================================================================
-# 9. スクリプト実行
-# =================================================================
+
+# スクリプト実行
 if __name__ == '__main__':
     # 訓練を実行し、訓練済みモデルとテストローダーを取得
     trained_model, test_loader, device = train_model()
@@ -571,6 +641,6 @@ if __name__ == '__main__':
         data_loader=test_loader, 
         device=device, 
         num_samples=5, 
-        save_dir="./predictions_output_wrn" # 保存先ディレクトリをWRN用に変更
+        save_dir="./predictions_output" # 保存先ディレクトリ
     )
     print("--- 予測ランドマークの描画と保存が完了しました。---")

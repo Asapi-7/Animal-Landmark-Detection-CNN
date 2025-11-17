@@ -21,18 +21,29 @@ from tqdm import tqdm
 import torch.optim as optim
 from torchvision.ops import box_iou
 
+import random
+import cv2
+
 # データセット
 class CustomObjectDetectionDataset(Dataset):
-    # ⚠️ __init__を修正: rootではなく、画像パスのリストを受け取る
-    def __init__(self, img_list, root, transforms=None):
-        self.root = root # .ptsファイルを見つけるためにrootを保持
+    def __init__(self, img_list, root, transforms=None, augment=False):
+        """
+        img_list: 画像ファイルのリスト
+        root: .ptsファイルのあるルートディレクトリ
+        augment: データ拡張を行うかどうか
+        """
+        self.root = root
+        self.imgs = img_list
         self.transforms = transforms
-        self.imgs = img_list # 👈 既に分割された画像パスのリストを使用
-        
+        self.augment = augment
+
+        # カラージッター設定（BBoxに影響しない）
+        self.color_transform = T.ColorJitter(
+            brightness=0.2, contrast=0.2, saturation=0.2
+        )
+        self.to_tensor = T.ToTensor()
+
     def _parse_pts(self, pts_path):
-    
-         #.ptsファイルから2点 (左上と右下など) を読み取り、
-    
         boxes = []
         labels = []
 
@@ -43,15 +54,11 @@ class CustomObjectDetectionDataset(Dataset):
         with open(pts_path, 'r') as f:
             for line in f:
                 line = line.strip()
-            # 空行やヘッダー、波括弧をスキップ
                 if not line or line.startswith("version") or line in ["{", "}"]:
                     continue
-
-            # "129 100" のような座標ペアを読む
                 parts = line.split()
                 if len(parts) != 2:
                     continue
-
                 try:
                     x, y = float(parts[0]), float(parts[1])
                     xs.append(x)
@@ -63,62 +70,65 @@ class CustomObjectDetectionDataset(Dataset):
             xmin, xmax = min(xs), max(xs)
             ymin, ymax = min(ys), max(ys)
             boxes = np.array([[xmin, ymin, xmax, ymax]], dtype=np.float32)
-            labels = np.array([1], dtype=np.int64)  # ← 全て同じクラス扱い
+            labels = np.array([1], dtype=np.int64)
         else:
-            # 点が足りない場合は空にしておく
             boxes = np.empty((0, 4), dtype=np.float32)
             labels = np.empty((0,), dtype=np.int64)
 
         return boxes, labels
 
-        
     def __getitem__(self, idx):
-        # 1. 画像とPTSファイルのパス
-        # self.imgs には 'dataset/img001.jpg' のような相対パスが入っていることを想定
         img_path_full = self.imgs[idx]
-        
-        # rootからファイル名を抽出（img_listが絶対パスの場合、ここではファイル名だけ抽出する）
         img_filename = os.path.basename(img_path_full)
         base_name = os.path.splitext(img_filename)[0]
-        pts_filename = base_name + ".pts"
-        
-        # .ptsファイルのパスを作成
-        pts_path = os.path.join(self.root, pts_filename)
+        pts_path = os.path.join(self.root, base_name + ".pts")
 
-        # 2. データ読み込み
-        img = Image.open(img_path_full).convert("RGB") # 👈 修正: img_path_fullを使用
+        # --- 画像読み込み (OpenCVでBGR→RGB変換)
+        img = cv2.imread(img_path_full)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        H, W, _ = img.shape
+
+        # --- BBox取得
         boxes_np, labels_np = self._parse_pts(pts_path)
 
-        # 3. ターゲット辞書の作成（RetinaNetの要求形式）
+        # --- データ拡張 ---
+        if self.augment and boxes_np.size > 0:
+            x1, y1, x2, y2 = boxes_np[0]
+
+            # 1. 左右反転（確率50%）
+            if random.random() > 0.5:
+                img = cv2.flip(img, 1)
+                x1_new = W - x2
+                x2_new = W - x1
+                x1, x2 = x1_new, x2_new
+
+            boxes_np = np.array([[x1, y1, x2, y2]], dtype=np.float32)
+
+            # 2. 色変換（BBoxに影響しない）
+            pil_img = T.functional.to_pil_image(img)
+            img = self.color_transform(pil_img)
+            img = T.functional.to_tensor(img)  # PIL→Tensor
+        else:
+            img = self.to_tensor(img)
+
+        # --- ターゲット作成 ---
         if boxes_np.size == 0:
             boxes = torch.empty((0, 4), dtype=torch.float32)
             labels = torch.empty((0,), dtype=torch.int64)
         else:
             boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
             labels = torch.as_tensor(labels_np, dtype=torch.int64)
-        
-        target = {}
-        target["boxes"] = boxes
-        target["labels"] = labels
-        target["image_id"] = torch.tensor([idx])
-        
-        # 4. 変換（transforms）の適用
-        if self.transforms is not None:
-            img = self.transforms(img)
+
+        target = {
+            "boxes": boxes,
+            "labels": labels,
+            "image_id": torch.tensor([idx])
+        }
 
         return img, target
 
     def __len__(self):
         return len(self.imgs)
-
-# Transformsの定義 データ拡張
-def get_transform(train):
-    transforms = []
-    transforms.append(T.ToTensor())
-    if train:
-        transforms.append(T.RandomHorizontalFlip(0.5))
-        transforms.append(T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2))
-    return T.Compose(transforms)
 
 
 # Collate Functionの定義
@@ -197,7 +207,7 @@ backbone_fpn = _resnet_fpn_extractor(
 
 # ダミー画像をFPNに通して出力層の構造を確認
 with torch.no_grad():
-    dummy_image = torch.rand(1, 3, 224, 224)  # バッチサイズ1
+    dummy_image = torch.rand(1, 3, 224, 224)  # バッチサイズ1 RGBの3
     features = backbone_fpn(dummy_image)
     print("FPN 出力層のキー:", list(features.keys()))
     print("各層の出力形状:")
@@ -208,7 +218,7 @@ num_feature_maps = len(features)
 print("FPN 出力層数:", num_feature_maps)
 
 # AnchorGenerator を出力層数に合わせて作成
-base_sizes = [8, 16, 32, 64, 128, 256]
+base_sizes = [8, 16, 32, 64, 128, 224]
 sizes_for_anchor = tuple((s,) for s in base_sizes[:num_feature_maps])
 
 anchor_generator = AnchorGenerator(
@@ -241,6 +251,13 @@ optimizer = optim.SGD(
     lr=0.001,
     momentum=0.9,
     weight_decay=0.001
+)
+
+# スケジューラー
+scheduler = torch.optim.lr_scheduler.StepLR(
+    optimizer,
+    step_size=5,
+    gamma=0.1
 )
 
 # 評価関数
@@ -342,6 +359,13 @@ for epoch in range(num_epochs):
             print(f"Step {step}, Total Loss: {losses.item():.4f}, "
                   f"Cls Loss: {loss_dict['classification'].item():.4f}, "
                   f"Box Loss: {loss_dict['bbox_regression'].item():.4f}")
+            
+    # 学習率の出力
+    current_lr = optimizer.param_groups[0]["lr"]
+    tqdm.write(f"LR: {current_lr:.6f}")
+    
+    # スケジューラーステップ：学習率を調整
+    scheduler.step()
 
     print(f"--- Epoch {epoch+1} 完了: 平均損失 {total_epoch_loss/len(train_loader):.4f} ---")
 
