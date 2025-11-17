@@ -12,8 +12,8 @@ from torch.utils.data import Dataset # データセットの定義と使用
 from torch.utils.data import DataLoader # データローダーの定義と使用
 from torchvision import transforms as T # 画像変換(Tensorに)
 from torchvision.ops import box_iou # IoUの計算(IoU：)
-import torchvision.transforms.v2 as T_v2 # 一貫性を持たせられる
-from torchvision.tv_tensors import BoundingBoxes, Mask, Image as TVImage # 二つのデータを同期させられる
+#import torchvision.transforms.v2 as T_v2 # 一貫性を持たせられる
+#from torchvision.tv_tensors import BoundingBoxes, Mask, Image as TVImage # 二つのデータを同期させられ
 
 # モデル構築用
 from resnet18_backbone import resnet18 # ResNet18のバックボーン
