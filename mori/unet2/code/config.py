@@ -1,6 +1,7 @@
 import torch
 
-ROOT_DIR = '../../unet/cropped_dataset/'
+#ROOT_DIR = '../../unet/cropped_dataset/'
+ROOT_DIR = './cropped_dataset/'
 
 IMAGE_SIZE = (256, 256)
 
