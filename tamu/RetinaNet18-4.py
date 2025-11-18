@@ -12,8 +12,8 @@ from torch.utils.data import Dataset # データセットの定義と使用
 from torch.utils.data import DataLoader # データローダーの定義と使用
 from torchvision import transforms as T # 画像変換(Tensorに)
 from torchvision.ops import box_iou # IoUの計算(IoU：)
-#import torchvision.transforms.v2 as T_v2 # 一貫性を持たせられる
-#from torchvision.tv_tensors import BoundingBoxes, Mask, Image as TVImage # 二つのデータを同期させられ
+import torchvision.transforms.v2 as T_v2 # 一貫性を持たせられる
+from torchvision.tv_tensors import BoundingBoxes, Mask, Image as TVImage # 二つのデータを同期させられる
 
 # モデル構築用
 from resnet18_backbone import resnet18 # ResNet18のバックボーン
@@ -200,7 +200,7 @@ test_loader = DataLoader(
 
 
 # バックボーンとアンカー生成器の構築
-custom_backbone = resnet18(pretrained=False) # ResNet18を使えるようにする (重みなし)
+custom_backbone = resnet18(pretrained=True) # ResNet18を使えるようにする (重みあり)
 
 # FPNを構築するための設定
 out_channels = 256 # FPNの各出力マップのチャンネル数
@@ -298,12 +298,18 @@ model = RetinaNet(
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 model.to(device)
 
-# オプティマイザの定義 (SGD：確率的勾配降下法)
-optimizer = optim.SGD(
-    model.parameters(), 
-    lr=0.001, # 学習率
-    momentum=0.9,
-    weight_decay=0.001 # 過学習防止
+# オプティマイザの定義 (Adam:)
+optimizer = optim.Adam(
+    model.parameters(),
+    lr=0.0001,
+    weight_decay=0.0001
+)
+
+# スケジューラー
+scheduler = torch.optim.lr_scheduler.StepLR(
+    optimizer,
+    step_size=5,
+    gamma=0.1
 )
 
 # 評価関数
@@ -404,6 +410,13 @@ for epoch in range(num_epochs):
 
         # オプティマイザのステップ: 重みを更新
         optimizer.step() 
+
+    # 学習率の出力
+    current_lr = optimizer.param_groups[0]["lr"]
+    tqdm.write(f"LR: {current_lr:.6f}")
+    
+    # スケジューラーステップ：学習率を調整
+    scheduler.step()
         
     #end_time = time.time()
     tqdm.write(f"--- Epoch [{epoch}/{num_epochs}] 完了。 平均損失: {total_epoch_loss / len(train_loader):.4f}s ---")

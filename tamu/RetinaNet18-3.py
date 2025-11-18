@@ -12,8 +12,8 @@ from torch.utils.data import Dataset # データセットの定義と使用
 from torch.utils.data import DataLoader # データローダーの定義と使用
 from torchvision import transforms as T # 画像変換(Tensorに)
 from torchvision.ops import box_iou # IoUの計算(IoU：)
-#import torchvision.transforms.v2 as T_v2 # 一貫性を持たせられる
-#from torchvision.tv_tensors import BoundingBoxes, Mask, Image as TVImage # 二つのデータを同期させられ
+import torchvision.transforms.v2 as T_v2 # 一貫性を持たせられる
+from torchvision.tv_tensors import BoundingBoxes, Mask, Image as TVImage # 二つのデータを同期させられる
 
 # モデル構築用
 from resnet18_backbone import resnet18 # ResNet18のバックボーン
@@ -200,7 +200,7 @@ test_loader = DataLoader(
 
 
 # バックボーンとアンカー生成器の構築
-custom_backbone = resnet18(pretrained=False) # ResNet18を使えるようにする (重みなし)
+custom_backbone = resnet18(pretrained=True) # ResNet18を使えるようにする (重みあり)
 
 # FPNを構築するための設定
 out_channels = 256 # FPNの各出力マップのチャンネル数
