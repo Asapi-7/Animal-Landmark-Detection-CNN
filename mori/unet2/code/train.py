@@ -115,21 +115,47 @@ def main():
         os.makedirs(OUTPUT_DIR)
         print(f"Created output directory: {OUTPUT_DIR}")
 
-    transform = Compose([
-        Resize(config.IMAGE_SIZE),
+    resize_transform = Resize(config.IMAGE_SIZE)
+
+    final_image_transform = Compose([
         ToTensor(),
         Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    full_dataset = AnimalKeypointDataset(root_dir=config.ROOT_DIR, transform=transform)
+    from dataset import RandomHorizontalFlipWithKeypoints, RandomRotationWithKeypoints, AnimalKeypointDataset
 
-    train_size = int(0.8 * len(full_dataset))
-    test_size = len(full_dataset) - train_size
-    train_dataset, test_dataset = random_split(full_dataset, [train_size, test_size])
-    train_dataloader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, num_workers=4)
-    test_dataloader = DataLoader(test_dataset, batch_size=config.BATCH_SIZE, shuffle=False, num_workers=4)
+    train_augmentation_pipeline = Compose([
+        lambda x: {'image': resize_transform(x['image']), 'keypoints': x['keypoints']},
+        RandomHorizontalFlipWithKeypoints(p=0.5),
+        RandomRotationWithKeypoints(degrees=(-10, 10))
+    ])
 
-    print(f"Full Dataset loaded with {len(full_dataset)} images.")
+    temp_dataset = AnimalKeypointDataset(root_dir=config.ROOT_DIR)
+
+    full_indices = list(range(len(temp_dataset)))
+    train_size = int(0.8 * len(temp_dataset))
+
+    train_indices, test_indices = random_split(full_indices, [train_size, len(temp_dataset) - train_size])
+
+    train_full_dataset = AnimalKeypointDataset(
+        root_dir=config.ROOT_DIR,
+        image_transform=final_image_transform,
+        data_augmentation=train_augmentation_pipeline
+    )
+
+    test_full_dataset = AnimalKeypointDataset(
+        root_dir=config.ROOT_DIR,
+        image_transform=final_image_transform,
+        data_augmentation=None
+    )
+
+    train_dataset = torch.utils.data.Subset(train_full_dataset, train_indices)
+    test_dataset = torch.utils.data.Subset(test_full_dataset, test_indices)
+
+    train_dataloader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE,shuffle=True, num_workers=4)
+    test_dataloader = DataLoader(test_dataset, batch_size=config.BATCH_SIZE,shuffle=False, num_workers=4)
+
+    print(f"Full Dataset loaded with {len(temp_dataset)} images.")
     print(f"Train Dataset size: {len(train_dataset)}")
     print(f"Test Dataset size: {len(test_dataset)}")
 
