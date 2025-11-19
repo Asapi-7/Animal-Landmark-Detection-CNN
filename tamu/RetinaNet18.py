@@ -312,71 +312,101 @@ optimizer = optim.SGD(
 )
 
 # 評価関数
-def evaluate_retinanet(model, dataloader, device, iou_threshold=0.5):
+def evaluate_retinanet(model, dataloader, device, iou_thresholds=(0.3,0.5,0.7)):
     """
     1画像につき予測を1つだけに制限して評価
     正解ボックスも1つだけの想定
     """
     model.eval()
     
-    total_ground_truth_boxes = 0
-    total_pred_boxes = 0
-    total_correct_detections_for_recall = 0
-    total_correct_detections_for_precision = 0
-    total_iou_sum = 0.0
+    total_images = 0
+    avg_iou_sum = 0.0
+    avg_iou_count = 0
+
+    # 指標用カウンタ（各 IoU閾値で正解数）
+    correct_at_thr = {thr: 0 for thr in iou_thresholds}
+    total_preds = 0  # 予測が存在した画像数（=pred_boxがあった画像数）
+    total_gts = 0    # 正解ボックス総数（通常は画像数と同じ）
 
     with torch.no_grad():
-        for images, targets in tqdm(dataloader, desc="Evaluating"):
+        for images, targets in tqdm(dataloader, desc="Evaluating Top-1"):
+            # images: list of tensors; targets: list of dicts
             images = [img.to(device).to(torch.float32) for img in images]
-            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+            outputs = model(images)  # list of dicts (boxes, scores, labels)
 
-            outputs = model(images)
+            # move outputs/targets to cpu for numpy operations
+            outputs = [{k: v.cpu() for k, v in out.items()} for out in outputs]
+            targets = [{k: (v.cpu() if isinstance(v, torch.Tensor) else v) for k, v in t.items()} for t in targets]
 
-            for output, target in zip(outputs, targets):
-                pred_boxes = output['boxes']
-                scores = output['scores']  # スコアも取得
-                true_boxes = target['boxes']
+            for out, tgt in zip(outputs, targets):
+                total_images += 1
+                true_boxes = tgt.get("boxes", torch.empty((0,4)))
+                if isinstance(true_boxes, torch.Tensor):
+                    num_gt = true_boxes.size(0)
+                else:
+                    num_gt = len(true_boxes)
+                total_gts += num_gt
 
-                # --- 予測を1つだけに制限 ---
-                if pred_boxes.size(0) > 0:
-                    max_idx = scores.argmax()
-                    pred_boxes = pred_boxes[max_idx].unsqueeze(0)  # [1,4]
+                # --- choose top-1 predicted box (highest score) ---
+                pred_boxes = out.get("boxes", torch.empty((0,4)))
+                scores = out.get("scores", torch.empty((0,)))
+                if pred_boxes.numel() == 0:
+                    # 予測ゼロ：偽陰性扱い（閾値毎にヒット0）
+                    continue
 
-                total_pred_boxes += pred_boxes.size(0)
+                # pick index of highest score
+                top_idx = int(torch.argmax(scores).item())
+                pred_box = pred_boxes[top_idx].unsqueeze(0)  # shape [1,4]
+                total_preds += 1
 
-                if true_boxes.size(0) == 0:
-                    continue  # 正解BOXがない場合はスキップ
+                # compute IoUs with all GT in this image
+                if num_gt == 0:
+                    # GT が無い（珍しいなら扱い方を決める — 今回は偽陽性としてカウントはしない）
+                    continue
 
-                total_ground_truth_boxes += true_boxes.size(0)
+                ious = box_iou(pred_box, true_boxes)  # shape [1, N_gt]
+                max_iou = float(ious.max().item())
 
-                if pred_boxes.size(0) == 0:
-                    continue  # 予測BOXがない場合はスキップ
+                avg_iou_sum += max_iou
+                avg_iou_count += 1
 
-                ious = box_iou(pred_boxes, true_boxes)  # [1,1] の想定
-
-                # Recall (正解BOX基準)
-                if ious.max() >= iou_threshold:
-                    total_correct_detections_for_recall += 1
-                    total_iou_sum += ious.max().item()
-
-                # Precision (予測BOX基準)
-                if ious.max() >= iou_threshold:
-                    total_correct_detections_for_precision += 1
+                # 閾値ごとに成功判定
+                for thr in iou_thresholds:
+                    if max_iou >= thr:
+                        correct_at_thr[thr] += 1
 
     # 指標計算
-    recall = (total_correct_detections_for_recall / total_ground_truth_boxes * 100.0
-              if total_ground_truth_boxes > 0 else 0.0)
-    precision = (total_correct_detections_for_precision / total_pred_boxes * 100.0
-                 if total_pred_boxes > 0 else 0.0)
-    avg_iou = (total_iou_sum / total_correct_detections_for_recall
-               if total_correct_detections_for_recall > 0 else 0.0)
+    avg_iou = (avg_iou_sum / avg_iou_count) if avg_iou_count > 0 else 0.0
 
-    print(f"\n--- 評価結果 (1予測/画像) ---")
-    print(f"Recall (IoU > {iou_threshold}): {recall:.2f}% ({total_correct_detections_for_recall}/{total_ground_truth_boxes})")
-    print(f"Precision (IoU > {iou_threshold}): {precision:.2f}% ({total_correct_detections_for_precision}/{total_pred_boxes})")
-    print(f"Average IoU: {avg_iou:.4f}")
+    results = {
+        "total_images": total_images,
+        "total_gts": total_gts,
+        "total_preds_with_any": total_preds,
+        "avg_iou_top1": avg_iou,
+    }
 
-    return avg_iou, recall, precision
+    for thr in iou_thresholds:
+        # Top-1 成功率 = correct_at_thr / total_images  （画像あたり1予測想定で正解判定）
+        results[f"top1_acc_iou_{thr}"] = correct_at_thr[thr] / total_images * 100.0
+
+    # 単純な precision/recall（Top-1 のみを使う単純版）
+    # precision = hits / preds, recall = hits / gts
+    # hits を IoU 0.5 で定義（必要なら変更）
+    hits = correct_at_thr.get(0.5, 0)
+    precision = (hits / total_preds * 100.0) if total_preds > 0 else 0.0
+    recall = (hits / total_gts * 100.0) if total_gts > 0 else 0.0
+    results["precision_top1_iou_0.5"] = precision
+    results["recall_top1_iou_0.5"] = recall
+
+    # pretty print
+    print("\n=== Top-1 Evaluation ===")
+    print(f"Images: {total_images}, GT boxes: {total_gts}, images with any pred: {total_preds}")
+    print(f"Avg IoU (for images with preds): {avg_iou:.4f}")
+    for thr in iou_thresholds:
+        print(f"Top-1 accuracy @ IoU>={thr}: {results[f'top1_acc_iou_{thr}']:.2f}%  ({correct_at_thr[thr]}/{total_images})")
+    print(f"Precision (Top-1, IoU>=0.5): {precision:.2f}% | Recall (Top-1, IoU>=0.5): {recall:.2f}%")
+
+    return results
 
 # 学習するエポック数
 num_epochs = 20 
