@@ -205,7 +205,7 @@ class ResNet(nn.Module):
 #        x = torch.flatten(x, 1)
 #        x = self.fc(x)
 
-        return [c2,c3,c4,c5] # 特徴マップを返す
+        return [c3,c4,c5] # 特徴マップを返す
 
     def forward(self, x):
         return self._forward_impl(x)
