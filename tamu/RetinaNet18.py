@@ -312,16 +312,13 @@ def evaluate_retinanet(model, dataloader, device, iou_threshold=0.5):
     model.eval() # 推論モードに切り替え
     
     total_images = 0 
-    avg_iou_sum = 0.0
-
-    # 指標用カウンタ（各 IoU閾値で正解数）
-    correct_at_thr = {thr: 0 for thr in iou_threshold} # IoUの閾値ごとに正解数をカウント
+    total_iou_sum = 0.0
     total_preds = 0  # 予測が存在した画像数（=pred_boxがあった画像数）
-    total_gts = 0    # 正解ボックス総数＝画像数
+    correct_detections = 0    # 正解ボックス総数＝画像数
 
     with torch.no_grad():
-        for images, targets in tqdm(dataloader, desc="Evaluating Top-1"): # images:画像テンソルのリスト、targets:ｱﾉﾃｰｼｮﾝ
-            images = [img.to(device).to(torch.float32) for img in images]
+        for images, targets in tqdm(dataloader, desc="Evaluating"): # images:画像テンソルのリスト、targets:ｱﾉﾃｰｼｮﾝ
+            images = [img.to(device).float() for img in images]
             outputs = model(images)  # 予測結果(boxes,scores,labels)
 
             # cpuに変える
@@ -332,7 +329,6 @@ def evaluate_retinanet(model, dataloader, device, iou_threshold=0.5):
             for output, target in zip(outputs, targets): # output:予測結果、target:正解ｱﾉﾃｰｼｮﾝ
                 total_images += 1 # 全画像数に+1
                 true_boxes = target["boxes"] # 正解ボックスがなければ、空テンソル
-                total_gts += 1 # 正解ボックス総数に+1
 
                 # スコアが最も高い予測ボックスを1つ選ぶ
                 pred_boxes = output["boxes"] # モデルが予測したリスト
@@ -353,7 +349,7 @@ def evaluate_retinanet(model, dataloader, device, iou_threshold=0.5):
                     correct_detections += 1
 
     # 指標計算
-    avg_iou = (avg_iou_sum / total_images) if total_images > 0 else 0.0
+    avg_iou = (total_iou_sum / total_preds) if total_images > 0 else 0.0
     accuracy = correct_detections / total_images if total_images > 0 else 0
 
     # pretty print
