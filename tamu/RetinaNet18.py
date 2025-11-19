@@ -106,10 +106,11 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
             # 左右反転
             if random.random() > 0.5:
                 img = T.functional.hflip(img)  # PIL の左右反転
+                width, height = img.size
 
                 # BBox も左右反転
-                x1_new = W - x2
-                x2_new = W - x1
+                x1_new = width - x2
+                x2_new = width - x1
                 x1, x2 = x1_new, x2_new
 
             boxes_np = np.array([[x1, y1, x2, y2]], dtype=np.float32)
