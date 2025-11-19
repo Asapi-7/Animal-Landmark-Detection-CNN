@@ -33,10 +33,11 @@ import random # データ拡張
 # データセットを整えるクラス
 class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
     # 初期化処理
-    def __init__(self, img_list, root, transforms=None): 
+    def __init__(self, img_list, root, transforms=None, augment=False): 
         self.root = root # .ptsファイルを保存するrootを保持
         self.transforms = transforms # 画像に適応する前処理(今回はなし)
         self.imgs = img_list # 画像パスのリストを保持する
+        self.augment = augment # データ拡張用
 
     # バウンディングボックスの情報を抽出する    
     def _parse_pts(self, pts_path):
@@ -177,8 +178,8 @@ train_imgs, test_imgs = train_test_split(
 print(f"学習用サンプル数 (80%): {len(train_imgs)}, テスト用サンプル数 (20%): {len(test_imgs)}")
 
 # Datasetのインスタンス作成　それぞれのデータセットを作成
-train_dataset = CustomObjectDetectionDataset(train_imgs, DATA_ROOT, get_transform(train=True)) # 拡張可能
-test_dataset = CustomObjectDetectionDataset(test_imgs, DATA_ROOT, get_transform(train=False))
+train_dataset = CustomObjectDetectionDataset(train_imgs, DATA_ROOT, get_transform(train=True), augment=True) # 拡張可能
+test_dataset = CustomObjectDetectionDataset(test_imgs, DATA_ROOT, get_transform(train=False), augment=False)
 
 # DataLoaderの作成
 train_loader = DataLoader(
