@@ -130,6 +130,15 @@ class CustomObjectDetectionDataset(Dataset):
     def __len__(self):
         return len(self.imgs)
 
+# 画像変換（トランスフォーム）を返す関数
+def get_transform(train=False):
+    transforms = []
+
+    # PIL → Tensor 変換
+    transforms.append(T.ToTensor())
+
+    return T.Compose(transforms)
+
 
 # Collate Functionの定義
 def custom_collate_fn(batch):
