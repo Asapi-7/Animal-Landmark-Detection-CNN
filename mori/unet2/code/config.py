@@ -3,7 +3,7 @@ import torch
 #ROOT_DIR = '../../unet/cropped_dataset/'
 ROOT_DIR = './cropped_dataset/'
 
-IMAGE_SIZE = (256, 256)
+IMAGE_SIZE = (224, 224)
 
 NUM_KEYPOINTS = 9
 
