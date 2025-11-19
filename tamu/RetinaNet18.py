@@ -14,6 +14,7 @@ from torchvision import transforms as T # 画像変換(Tensorに)
 from torchvision.ops import box_iou # IoUの計算(IoU：)
 #import torchvision.transforms.v2 as T_v2 # 一貫性を持たせられる
 #from torchvision.tv_tensors import BoundingBoxes, Mask, Image as TVImage # 二つのデータを同期させられ
+from torchvision import transforms
 
 # モデル構築用
 from resnet18_backbone import resnet18 # ResNet18のバックボーン
@@ -38,7 +39,7 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         self.transforms = transforms # 画像に適応する前処理(今回はなし)
         self.imgs = img_list # 画像パスのリストを保持する
         self.augment = augment # データ拡張用
-        self.color_transform = None # 色変換用
+        self.color_transform = transforms.ColorJitter(brightness=0.2, contrast=0.2,　saturation=0.2, hue=0.02 ) # 色変換用
 
     # バウンディングボックスの情報を抽出する    
     def _parse_pts(self, pts_path):
@@ -117,7 +118,8 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
             boxes_np = np.array([[x1, y1, x2, y2]], dtype=np.float32)
 
             # 2色変換
-            img = self.color_transform(img)
+            if self.color_transform is not None:
+                img = self.color_transform(img)
 
             # Tensor に変換
             img = T.functional.to_tensor(img)
