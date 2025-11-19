@@ -39,7 +39,7 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         self.transforms = transforms # 画像に適応する前処理(今回はなし)
         self.imgs = img_list # 画像パスのリストを保持する
         self.augment = augment # データ拡張用
-        self.color_transform = transforms.ColorJitter(brightness=0.2, contrast=0.2,　saturation=0.2, hue=0.02 ) # 色変換用
+        self.color_transform = transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.02 ) # 色変換用
 
     # バウンディングボックスの情報を抽出する    
     def _parse_pts(self, pts_path):
