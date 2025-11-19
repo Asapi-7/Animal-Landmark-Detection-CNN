@@ -113,6 +113,11 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
                 x2_new = width - x1
                 x1, x2 = x1_new, x2_new
 
+            print("DEBUG boxes_np:", boxes_np)
+            print("DEBUG shape:", boxes_np.shape)
+            print("DEBUG type x1:", type(x1))
+
+
             boxes_np = np.array([[x1, y1, x2, y2]], dtype=np.float32)
 
             # 2色変換
