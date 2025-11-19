@@ -205,16 +205,16 @@ class ResNet(nn.Module):
         x = self.relu(x)
         x = self.maxpool(x)
 
-        c2 = self.layer1(x)
-        c3 = self.layer2(x)
-        c4 = self.layer3(x)
-        c5 = self.layer4(x) # 出力をそれぞれ個別に保存して返す
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x) # 出力をそれぞれ個別に保存して返す
 
 #        x = self.avgpool(x)
 #        x = torch.flatten(x, 1)
 #        x = self.fc(x)
 
-        return [c2,c3,c4,c5] # 特徴マップを返す
+        return x # 特徴マップを返す
 
     def forward(self, x):
         return self._forward_impl(x)
