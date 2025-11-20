@@ -27,7 +27,6 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split # データ分割用
 from PIL import Image # 画像ファイルの読み込みとRBG変換
 import random # データ拡張
-import matplotlib.pyplot as plt # グラフ出力用
 
 
 # データセットを整えるクラス
