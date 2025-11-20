@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader # データローダーの定義と使�
 from torchvision import transforms as T # 画像変換(Tensorに)
 from torchvision.ops import box_iou # IoUの計算(IoU：)
 from torchvision import transforms
+from torch.optim.lr_scheduler import MultiStepLR
 
 # モデル構築用
 from resnet18_backbone import resnet18 # ResNet18のバックボーン
@@ -28,7 +29,7 @@ from sklearn.model_selection import train_test_split # データ分割用
 from PIL import Image # 画像ファイルの読み込みとRBG変換
 import random # データ拡張
 
-
+#----------------------------------------------------------------------------------
 # データセットを整えるクラス
 class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
     # 初期化処理
@@ -163,7 +164,6 @@ def custom_collate_fn(batch): # batch：(img,target)
     targets = [item[1] for item in batch] # ｱﾉﾃｰｼｮﾝのみのリストを作成
     return images, targets
 
-
 # データの読み込みと分割
 DATA_ROOT = '/workspace/dataset' # データのルートディレクトリを指定
 
@@ -204,7 +204,7 @@ test_loader = DataLoader(
     collate_fn=custom_collate_fn 
 )
 
-
+#-----------------------------------------------------------------------------------------
 # バックボーンとアンカー生成器の構築
 custom_backbone = resnet18(pretrained=False) # ResNet18を使えるようにする (重みなし)
 
@@ -293,12 +293,19 @@ model = RetinaNet(
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 model.to(device)
 
-# オプティマイザの定義 (SGD：確率的勾配降下法)
+# オプティマイザの定義 (SGD：確率的勾配降下法) ハイパーパラメータ
 optimizer = optim.SGD(
     model.parameters(), 
-    lr=0.001, # 学習率
+    lr=0.01, # 学習率
     momentum=0.9,
-    weight_decay=0.001 # 過学習防止
+    weight_decay=0.0005 # 過学習防止
+)
+
+# 学習率を下げる
+scheduler = MultiStepLR(
+    optimizer,
+    milestones=[10, 15],   # 10 epoch で lr を下げ、15 epoch でさらに下げる
+    gamma=0.1              # 1/10 に減衰
 )
 
 #---------------------------------------------------------------------------
@@ -391,7 +398,7 @@ for epoch in range(num_epochs):
         # オプティマイザのステップ: 重みを更新
         optimizer.step() 
         
-    #end_time = time.time()
+    scheduler.step()
     tqdm.write(f"--- Epoch [{epoch}/{num_epochs}] 完了。 平均損失: {total_epoch_loss / len(train_loader):.4f}s ---")
     avg_train_loss = total_epoch_loss / len(train_loader)
 
