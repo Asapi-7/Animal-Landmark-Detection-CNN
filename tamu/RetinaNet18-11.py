@@ -398,9 +398,27 @@ for epoch in range(num_epochs):
         # オプティマイザのステップ: 重みを更新
         optimizer.step() 
         
-    scheduler.step()
     tqdm.write(f"--- Epoch [{epoch}/{num_epochs}] 完了。 平均損失: {total_epoch_loss / len(train_loader):.4f}s ---")
     avg_train_loss = total_epoch_loss / len(train_loader)
+
+    scheduler.step()
+
+    model.eval()
+    total_test_loss = 0.0
+
+    with torch.no_grad():
+        for images, targets in tqdm(test_loader, desc=f"Testing {epoch+1}/{num_epochs}"):
+
+            images = [img.to(device).float() for img in images]
+            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+            loss_dict = model(images, targets)
+            losses = sum(loss for loss in loss_dict.values())
+            total_test_loss += losses.item()
+
+    avg_test_loss = total_test_loss / len(test_loader)
+
+    tqdm.write(f"[Epoch {epoch+1}] Test Loss: {avg_test_loss:.4f}")
 
 #------------------------------------------------------------------------------------
 
