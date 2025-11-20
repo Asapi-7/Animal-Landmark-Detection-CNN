@@ -38,6 +38,7 @@ def generate_heatmaps(keypoints, output_size, sigma):
 class RandomHorizontalFlipWithKeypoints:
     def __init__(self, p=0.5):
         self.p = p
+        self.flip_pairs = [(1,4),(2,3),(6,7)]
 
     def __call__(self, sample):
         image, keypoints = sample['image'], sample['keypoints']
@@ -45,6 +46,12 @@ class RandomHorizontalFlipWithKeypoints:
             W, H = image.size
             image = image.transpose(Image.FLIP_LEFT_RIGHT)
             keypoints[:, 0] = W - 1 - keypoints[:, 0]
+
+            new_keypoints = keypoints.copy()
+            for i, j in self.flip_pairs:
+                new_keypoints[i], new_keypoints[j] = keypoints[j].copy(), keypoints[i].copy()
+
+            keypoints = new_keypoints
 
         sample['image'] = image
         sample['keypoints'] = keypoints
