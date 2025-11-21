@@ -414,6 +414,11 @@ for epoch in range(num_epochs):
 
             # 学習時と同じように loss を計算
             loss_dict = model(images, targets)
+
+            if isinstance(loss_dict, list):
+                print("Warning: loss_dict is list, switching to train mode earlier needed.")
+                continue
+
             losses = sum(loss for loss in loss_dict.values())
 
             test_loss += losses.item()
