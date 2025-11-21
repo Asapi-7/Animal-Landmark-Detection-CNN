@@ -403,23 +403,23 @@ for epoch in range(num_epochs):
 
     scheduler.step()
 
-    model.eval()
-    total_test_loss = 0.0
+    model.train()   # ← 重要（loss を返させるため）
+    test_loss = 0.0
 
     with torch.no_grad():
         for images, targets in tqdm(test_loader, desc=f"Testing {epoch+1}/{num_epochs}"):
-
             images = [img.to(device).float() for img in images]
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
+            # 学習時と同じように loss を計算
             loss_dict = model(images, targets)
             losses = sum(loss for loss in loss_dict.values())
-            total_test_loss += losses.item()
 
-    avg_test_loss = total_test_loss / len(test_loader)
+            test_loss += losses.item()
 
-    tqdm.write(f"[Epoch {epoch+1}] Test Loss: {avg_test_loss:.4f}")
-
+    avg_test_loss = test_loss / len(test_loader)
+    print(f"Epoch {epoch+1} Test Loss: {avg_test_loss:.4f}")
+ 
 #------------------------------------------------------------------------------------
 
 # モデルの重みを保存
