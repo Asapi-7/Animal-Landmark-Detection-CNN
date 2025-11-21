@@ -112,7 +112,9 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
                 # BBox も左右反転
                 x1_new = width - x2
                 x2_new = width - x1
-                x1, x2 = x1_new, x2_new
+                
+                x1 = min(x1_new, x2_new)
+                x2 = max(x1_new, x2_new)
 
             boxes_np = np.array([[x1, y1, x2, y2]], dtype=np.float32)
 
