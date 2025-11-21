@@ -99,6 +99,12 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         # BBox読み込み
         boxes_np, labels_np = self._parse_pts(pts_path)
 
+        if boxes_np.size > 0:
+            x1, y1, x2, y2 = boxes_np[0]
+        if x2 - x1 < 1 or y2 - y1 < 1:  # width or height が 1 ピクセル未満
+            boxes_np = np.empty((0, 4), dtype=np.float32)
+            labels_np = np.empty((0,), dtype=np.int64)
+
         # データ拡張
         if self.augment and boxes_np.size > 0:
 
@@ -405,7 +411,8 @@ for epoch in range(num_epochs):
 
     scheduler.step()
 
-    model.train()   # ← 重要（loss を返させるため）
+    ### --- テストロス計算ループ ---###
+    model.train()   
     test_loss = 0.0
 
     with torch.no_grad():
@@ -415,13 +422,14 @@ for epoch in range(num_epochs):
 
             # 学習時と同じように loss を計算
             loss_dict = model(images, targets)
+
             losses = sum(loss for loss in loss_dict.values())
 
             test_loss += losses.item()
 
     avg_test_loss = test_loss / len(test_loader)
     print(f"Epoch {epoch+1} Test Loss: {avg_test_loss:.4f}")
- 
+
 #------------------------------------------------------------------------------------
 
 # モデルの重みを保存
