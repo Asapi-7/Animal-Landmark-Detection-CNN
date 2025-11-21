@@ -99,6 +99,12 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         # BBox読み込み
         boxes_np, labels_np = self._parse_pts(pts_path)
 
+        if boxes_np.size > 0:
+            x1, y1, x2, y2 = boxes_np[0]
+        if x2 - x1 < 1 or y2 - y1 < 1:  # width or height が 1 ピクセル未満
+            boxes_np = np.empty((0, 4), dtype=np.float32)
+            labels_np = np.empty((0,), dtype=np.int64)
+
         # データ拡張
         if self.augment and boxes_np.size > 0:
 
@@ -112,7 +118,9 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
                 # BBox も左右反転
                 x1_new = width - x2
                 x2_new = width - x1
-                x1, x2 = x1_new, x2_new
+                
+                x1 = min(x1_new, x2_new)
+                x2 = max(x1_new, x2_new)
 
             boxes_np = np.array([[x1, y1, x2, y2]], dtype=np.float32)
 
@@ -404,7 +412,7 @@ for epoch in range(num_epochs):
     scheduler.step()
 
     ### --- テストロス計算ループ ---###
-    model.train()   # ← 重要（loss を返させるため）
+    model.train()   
     test_loss = 0.0
 
     with torch.no_grad():
@@ -414,10 +422,6 @@ for epoch in range(num_epochs):
 
             # 学習時と同じように loss を計算
             loss_dict = model(images, targets)
-
-            if isinstance(loss_dict, list):
-                print("Warning: loss_dict is list, switching to train mode earlier needed.")
-                continue
 
             losses = sum(loss for loss in loss_dict.values())
 
