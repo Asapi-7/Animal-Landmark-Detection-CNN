@@ -118,37 +118,6 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
 
         if boxes_np.size > 0:
             x1, y1, x2, y2 = boxes_np[0]
-        if x2 - x1 < 1 or y2 - y1 < 1:  # width or height が 1 ピクセル未満
-            boxes_np = np.empty((0, 4), dtype=np.float32)
-            labels_np = np.empty((0,), dtype=np.int64)
-
-        if self.augment and boxes_np.size > 0:
-        # Albumentations 用の bbox 形式に変換
-            bboxes = boxes_np.tolist()
-            labels = labels_np.tolist()
-
-            augmented = self.augment_transform(
-                image=np.array(img),
-                bboxes=bboxes,
-                labels=labels
-            )
-
-            img = augmented['image']
-            boxes_np = np.array(augmented['bboxes'], dtype=np.float32)
-            labels_np = np.array(augmented['labels'], dtype=np.int64)
-
-        else:
-            # augment しない場合は ToTensor のみ
-            img = T.functional.to_tensor(img)
-
-    def __getitem__(self, idx):
-        img_path_full = self.imgs[idx]
-        img = Image.open(img_path_full).convert("RGB")
-
-        boxes_np, labels_np = self._parse_pts(pts_path)
-
-        if boxes_np.size > 0:
-            x1, y1, x2, y2 = boxes_np[0]
             if x2 - x1 < 1 or y2 - y1 < 1:
                 boxes_np = np.empty((0, 4), dtype=np.float32)
                 labels_np = np.empty((0,), dtype=np.int64)
