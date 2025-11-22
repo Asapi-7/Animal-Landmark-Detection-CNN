@@ -7,12 +7,13 @@ from tqdm import tqdm # 進捗表示
 
 # Pytorch関連
 import torch # pytorchの基本機能
-import torch.optim as optim # 最適化アルゴリズム(Adam)
+import torch.optim as optim # 最適化アルゴリズム(SGD)
 from torch.utils.data import Dataset # データセットの定義と使用
 from torch.utils.data import DataLoader # データローダーの定義と使用
 from torchvision import transforms as T # 画像変換(Tensorに)
 from torchvision.ops import box_iou # IoUの計算(IoU：)
 from torchvision import transforms
+from torch.optim.lr_scheduler import MultiStepLR
 
 # モデル構築用
 from resnet18_backbone import resnet18 # ResNet18のバックボーン
@@ -27,8 +28,8 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split # データ分割用
 from PIL import Image # 画像ファイルの読み込みとRBG変換
 import random # データ拡張
-from torch.optim.lr_scheduler import MultiStepLR
 
+#----------------------------------------------------------------------------------
 # データセットを整えるクラス
 class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
     # 初期化処理
@@ -98,6 +99,12 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         # BBox読み込み
         boxes_np, labels_np = self._parse_pts(pts_path)
 
+        if boxes_np.size > 0:
+            x1, y1, x2, y2 = boxes_np[0]
+        if x2 - x1 < 1 or y2 - y1 < 1:  # width or height が 1 ピクセル未満
+            boxes_np = np.empty((0, 4), dtype=np.float32)
+            labels_np = np.empty((0,), dtype=np.int64)
+
         # データ拡張
         if self.augment and boxes_np.size > 0:
 
@@ -111,7 +118,9 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
                 # BBox も左右反転
                 x1_new = width - x2
                 x2_new = width - x1
-                x1, x2 = x1_new, x2_new
+                
+                x1 = min(x1_new, x2_new)
+                x2 = max(x1_new, x2_new)
 
             boxes_np = np.array([[x1, y1, x2, y2]], dtype=np.float32)
 
@@ -163,7 +172,6 @@ def custom_collate_fn(batch): # batch：(img,target)
     targets = [item[1] for item in batch] # ｱﾉﾃｰｼｮﾝのみのリストを作成
     return images, targets
 
-
 # データの読み込みと分割
 DATA_ROOT = '/workspace/dataset' # データのルートディレクトリを指定
 
@@ -204,7 +212,7 @@ test_loader = DataLoader(
     collate_fn=custom_collate_fn 
 )
 
-
+#-----------------------------------------------------------------------------------------
 # バックボーンとアンカー生成器の構築
 custom_backbone = resnet18(pretrained=False) # ResNet18を使えるようにする (重みなし)
 
@@ -397,13 +405,12 @@ for epoch in range(num_epochs):
         # オプティマイザのステップ: 重みを更新
         optimizer.step() 
         
-    #end_time = time.time()
     tqdm.write(f"--- Epoch [{epoch}/{num_epochs}] 完了。 平均損失: {total_epoch_loss / len(train_loader):.4f}s ---")
     avg_train_loss = total_epoch_loss / len(train_loader)
 
     scheduler.step()
 
-    ## --- テストロス計算ループ ---###
+    ### --- テストロス計算ループ ---###
     model.train()   
     test_loss = 0.0
 
