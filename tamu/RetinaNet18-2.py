@@ -74,6 +74,10 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         if len(xs) >= 2 and len(ys) >= 2:
             xmin, xmax = min(xs), max(xs)
             ymin, ymax = min(ys), max(ys)
+
+            if xmax - xmin < 1 or ymax - ymin < 1:
+                return np.empty((0, 4), dtype=np.float32), np.empty((0,), dtype=np.int64)
+
             boxes = np.array([[xmin, ymin, xmax, ymax]], dtype=np.float32)
             labels = np.array([1], dtype=np.int64)  # 全て1にして単一クラス扱い
         else:
