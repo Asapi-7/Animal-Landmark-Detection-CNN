@@ -27,7 +27,7 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split # データ分割用
 from PIL import Image # 画像ファイルの読み込みとRBG変換
 import random # データ拡張
-
+from torch.optim.lr_scheduler import MultiStepLR
 
 # データセットを整えるクラス
 class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
@@ -293,11 +293,18 @@ model = RetinaNet(
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 model.to(device)
 
-# オプティマイザの定義 (Adam:)
+# オプティマイザの定義 (Adam:)　ハイパーパラメータ
 optimizer = optim.Adam(
     model.parameters(),
     lr=0.0001,
     weight_decay=0.0001
+)
+
+# 学習率を下げる
+scheduler = MultiStepLR(
+    optimizer,
+    milestones=[10, 15],   # 10 epoch で lr を下げ、15 epoch でさらに下げる
+    gamma=0.1              # 1/10 に減衰
 )
 
 #---------------------------------------------------------------------------
@@ -393,6 +400,27 @@ for epoch in range(num_epochs):
     #end_time = time.time()
     tqdm.write(f"--- Epoch [{epoch}/{num_epochs}] 完了。 平均損失: {total_epoch_loss / len(train_loader):.4f}s ---")
     avg_train_loss = total_epoch_loss / len(train_loader)
+
+    scheduler.step()
+
+    ## --- テストロス計算ループ ---###
+    model.train()   
+    test_loss = 0.0
+
+    with torch.no_grad():
+        for images, targets in tqdm(test_loader, desc=f"Testing {epoch+1}/{num_epochs}"):
+            images = [img.to(device).float() for img in images]
+            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+            # 学習時と同じように loss を計算
+            loss_dict = model(images, targets)
+
+            losses = sum(loss for loss in loss_dict.values())
+
+            test_loss += losses.item()
+
+    avg_test_loss = test_loss / len(test_loader)
+    print(f"Epoch {epoch+1} Test Loss: {avg_test_loss:.4f}")
 
 #------------------------------------------------------------------------------------
 
