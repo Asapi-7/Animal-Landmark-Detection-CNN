@@ -12,8 +12,8 @@ from torch.utils.data import Dataset # データセットの定義と使用
 from torch.utils.data import DataLoader # データローダーの定義と使用
 from torchvision import transforms as T # 画像変換(Tensorに)
 from torchvision.ops import box_iou # IoUの計算(IoU：)
-import torchvision.transforms.v2 as T_v2 # 一貫性を持たせられる
-from torchvision.tv_tensors import BoundingBoxes, Mask, Image as TVImage # 二つのデータを同期させられる
+from torchvision import transforms
+from torch.optim.lr_scheduler import MultiStepLR
 
 # モデル構築用
 from resnet18_backbone import resnet18 # ResNet18のバックボーン
@@ -29,7 +29,7 @@ from sklearn.model_selection import train_test_split # データ分割用
 from PIL import Image # 画像ファイルの読み込みとRBG変換
 import random # データ拡張
 
-
+#----------------------------------------------------------------------------------
 # データセットを整えるクラス
 class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
     # 初期化処理
@@ -38,6 +38,7 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         self.transforms = transforms # 画像に適応する前処理(今回はなし)
         self.imgs = img_list # 画像パスのリストを保持する
         self.augment = augment # データ拡張用
+        self.color_transform = T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.02 ) # 色変換用
 
     # バウンディングボックスの情報を抽出する    
     def _parse_pts(self, pts_path):
@@ -93,30 +94,39 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
 
         # データ読み込み
         img = Image.open(img_path_full).convert("RGB") # 画像をRGB形式で読み込む
-        W, H = self._parse_pts(pts_path) # .ptsファイルからバウンディングボックスとラベルをNumpy配列で取得
+        #W, H = self._parse_pts(pts_path) # .ptsファイルからバウンディングボックスとラベルをNumpy配列で取得
 
         # BBox読み込み
         boxes_np, labels_np = self._parse_pts(pts_path)
+
+        if boxes_np.size > 0:
+            x1, y1, x2, y2 = boxes_np[0]
+        if x2 - x1 < 1 or y2 - y1 < 1:  # width or height が 1 ピクセル未満
+            boxes_np = np.empty((0, 4), dtype=np.float32)
+            labels_np = np.empty((0,), dtype=np.int64)
 
         # データ拡張
         if self.augment and boxes_np.size > 0:
 
             x1, y1, x2, y2 = boxes_np[0]
-            width, height = img.size
             
             # 左右反転
             if random.random() > 0.5:
                 img = T.functional.hflip(img)  # PIL の左右反転
+                width, height = img.size
 
                 # BBox も左右反転
                 x1_new = width - x2
                 x2_new = width - x1
-                x1, x2 = x1_new, x2_new
+                
+                x1 = min(x1_new, x2_new)
+                x2 = max(x1_new, x2_new)
 
             boxes_np = np.array([[x1, y1, x2, y2]], dtype=np.float32)
 
             # 2色変換
-            img = self.color_transform(img)
+            if self.color_transform is not None:
+                img = self.color_transform(img)
 
             # Tensor に変換
             img = T.functional.to_tensor(img)
@@ -162,7 +172,6 @@ def custom_collate_fn(batch): # batch：(img,target)
     targets = [item[1] for item in batch] # ｱﾉﾃｰｼｮﾝのみのリストを作成
     return images, targets
 
-
 # データの読み込みと分割
 DATA_ROOT = '/workspace/dataset' # データのルートディレクトリを指定
 
@@ -170,6 +179,9 @@ DATA_ROOT = '/workspace/dataset' # データのルートディレクトリを指
 all_imgs = sorted(glob.glob(os.path.join(DATA_ROOT, "*.jpg"))) # shorted()でファイル名順に並び替えられる
 print(f"全画像数: {len(all_imgs)}")
 
+# =====================================================================================================
+# 8:1:1にする
+#=======================================================================================================
 # 学習用 (80%) とテスト用 (20%) に分割
 train_imgs, test_imgs = train_test_split( 
     all_imgs, 
@@ -200,9 +212,9 @@ test_loader = DataLoader(
     collate_fn=custom_collate_fn 
 )
 
-
+#-----------------------------------------------------------------------------------------
 # バックボーンとアンカー生成器の構築
-custom_backbone = resnet18(pretrained=True) # ResNet18を使えるようにする (重みあり)
+custom_backbone = resnet18(pretrained=False) # ResNet18を使えるようにする (重みなし)
 
 # FPNを構築するための設定
 out_channels = 256 # FPNの各出力マップのチャンネル数
@@ -254,17 +266,6 @@ fpn = FeaturePyramidNetwork(in_channels_list=[128, 256, 512], out_channels=256) 
 
 backbone = BackboneWithFPN(custom_backbone, fpn,out_channels=256) # ResNet + FPN を統合
 
-
-
-""""
-torchvisionの内部関数
-backbone_fpn = _resnet_fpn_extractor(
-    custom_backbone, 
-    trainable_layers=5, # ResNetのすべての層を学習可能に
-    extra_blocks=LastLevelP6P7(out_channels, out_channels) # さらに高レベルの特徴マップ(P6,P7)を追加
-)
-"""
-
 # ダミー画像をFPNに通して出力層の構造を確認
 with torch.no_grad():
     dummy_image = torch.rand(1, 3, 224, 224)  # バッチサイズ1 RGBの3
@@ -300,87 +301,79 @@ model = RetinaNet(
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 model.to(device)
 
-# オプティマイザの定義 (Adam:)
-optimizer = optim.Adam(
-    model.parameters(),
-    lr=0.0001,
-    weight_decay=0.0001
+# オプティマイザの定義 (SGD：確率的勾配降下法) ハイパーパラメータ
+optimizer = optim.SGD(
+    model.parameters(), 
+    lr=0.005, # 学習率
+    momentum=0.9,
+    weight_decay=0.0005 # 過学習防止
 )
 
-# スケジューラー
-scheduler = torch.optim.lr_scheduler.StepLR(
+# 学習率を下げる
+scheduler = MultiStepLR(
     optimizer,
-    step_size=5,
-    gamma=0.1
+    milestones=[10, 15],   # 10 epoch で lr を下げ、15 epoch でさらに下げる
+    gamma=0.1              # 1/10 に減衰
 )
 
+#---------------------------------------------------------------------------
 # 評価関数
 def evaluate_retinanet(model, dataloader, device, iou_threshold=0.5):
     """
     1画像につき予測を1つだけに制限して評価
     正解ボックスも1つだけの想定
     """
-    model.eval()
+    model.eval() # 推論モードに切り替え
     
-    total_ground_truth_boxes = 0
-    total_pred_boxes = 0
-    total_correct_detections_for_recall = 0
-    total_correct_detections_for_precision = 0
+    total_images = 0 
     total_iou_sum = 0.0
+    total_preds = 0  # 予測が存在した画像数（=pred_boxがあった画像数）
+    correct_detections = 0    # 正解ボックス総数＝画像数
 
     with torch.no_grad():
-        for images, targets in tqdm(dataloader, desc="Evaluating"):
-            images = [img.to(device).to(torch.float32) for img in images]
-            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        for images, targets in tqdm(dataloader, desc="Evaluating"): # images:画像テンソルのリスト、targets:ｱﾉﾃｰｼｮﾝ
+            images = [img.to(device).float() for img in images]
+            outputs = model(images)  # 予測結果(boxes,scores,labels)
 
-            outputs = model(images)
+            # cpuに変える
+            outputs = [{k: v.cpu() for k, v in out.items()} for out in outputs]
+            targets = [{k: (v.cpu() if isinstance(v, torch.Tensor) else v) for k, v in t.items()} for t in targets]
 
-            for output, target in zip(outputs, targets):
-                pred_boxes = output['boxes']
-                scores = output['scores']  # スコアも取得
-                true_boxes = target['boxes']
+            # 評価
+            for output, target in zip(outputs, targets): # output:予測結果、target:正解ｱﾉﾃｰｼｮﾝ
+                total_images += 1 # 全画像数に+1
+                true_boxes = target["boxes"] # 正解ボックスがなければ、空テンソル
 
-                # --- 予測を1つだけに制限 ---
-                if pred_boxes.size(0) > 0:
-                    max_idx = scores.argmax()
-                    pred_boxes = pred_boxes[max_idx].unsqueeze(0)  # [1,4]
+                # スコアが最も高い予測ボックスを1つ選ぶ
+                pred_boxes = output["boxes"] # モデルが予測したリスト
+                scores = output["scores"] # 予測が顔である確信度
 
-                total_pred_boxes += pred_boxes.size(0)
+                if pred_boxes.numel() == 0 or true_boxes.size(0) == 0:# 予測ゼロもしくは正解がない
+                    continue
 
-                if true_boxes.size(0) == 0:
-                    continue  # 正解BOXがない場合はスキップ
+                top_idx = scores.argmax() # 一番スコアが高い予測
+                pred_box = pred_boxes[top_idx].unsqueeze(0)  # 結果となる予測の形を変える[1,4]
+                total_preds += 1 # 予測が存在する枚数+1
 
-                total_ground_truth_boxes += true_boxes.size(0)
+                iou = box_iou(pred_box, true_boxes)[0,0].item()  # IoUの計算
 
-                if pred_boxes.size(0) == 0:
-                    continue  # 予測BOXがない場合はスキップ
+                total_iou_sum += iou # IoUの合計
 
-                ious = box_iou(pred_boxes, true_boxes)  # [1,1] の想定
-
-                # Recall (正解BOX基準)
-                if ious.max() >= iou_threshold:
-                    total_correct_detections_for_recall += 1
-                    total_iou_sum += ious.max().item()
-
-                # Precision (予測BOX基準)
-                if ious.max() >= iou_threshold:
-                    total_correct_detections_for_precision += 1
+                if iou >= iou_threshold: # 閾値ごとに成功判定
+                    correct_detections += 1
 
     # 指標計算
-    recall = (total_correct_detections_for_recall / total_ground_truth_boxes * 100.0
-              if total_ground_truth_boxes > 0 else 0.0)
-    precision = (total_correct_detections_for_precision / total_pred_boxes * 100.0
-                 if total_pred_boxes > 0 else 0.0)
-    avg_iou = (total_iou_sum / total_correct_detections_for_recall
-               if total_correct_detections_for_recall > 0 else 0.0)
+    avg_iou = (total_iou_sum / total_preds) if total_images > 0 else 0.0
+    accuracy = correct_detections / total_images if total_images > 0 else 0
 
-    print(f"\n--- 評価結果 (1予測/画像) ---")
-    print(f"Recall (IoU > {iou_threshold}): {recall:.2f}% ({total_correct_detections_for_recall}/{total_ground_truth_boxes})")
-    print(f"Precision (IoU > {iou_threshold}): {precision:.2f}% ({total_correct_detections_for_precision}/{total_pred_boxes})")
+    # pretty print
+    print(f"\n--- 評価結果 ---")
+    print(f"Accuracy (IoU > {iou_threshold}): {accuracy:.2f} ({correct_detections}/{total_images})")
     print(f"Average IoU: {avg_iou:.4f}")
 
-    return avg_iou, recall, precision
+    return avg_iou, accuracy
 
+# ------------------------------------------------------------------------------
 # 学習するエポック数
 num_epochs = 20 
 
@@ -412,16 +405,32 @@ for epoch in range(num_epochs):
 
         # オプティマイザのステップ: 重みを更新
         optimizer.step() 
-
-    # 学習率の出力
-    current_lr = optimizer.param_groups[0]["lr"]
-    tqdm.write(f"LR: {current_lr:.6f}")
-    
-    # スケジューラーステップ：学習率を調整
-    scheduler.step()
         
-    #end_time = time.time()
     tqdm.write(f"--- Epoch [{epoch}/{num_epochs}] 完了。 平均損失: {total_epoch_loss / len(train_loader):.4f}s ---")
+    avg_train_loss = total_epoch_loss / len(train_loader)
+
+    scheduler.step()
+
+    ### --- テストロス計算ループ ---###
+    model.train()   
+    test_loss = 0.0
+
+    with torch.no_grad():
+        for images, targets in tqdm(test_loader, desc=f"Testing {epoch+1}/{num_epochs}"):
+            images = [img.to(device).float() for img in images]
+            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+            # 学習時と同じように loss を計算
+            loss_dict = model(images, targets)
+
+            losses = sum(loss for loss in loss_dict.values())
+
+            test_loss += losses.item()
+
+    avg_test_loss = test_loss / len(test_loader)
+    print(f"Epoch {epoch+1} Test Loss: {avg_test_loss:.4f}")
+
+#------------------------------------------------------------------------------------
 
 # モデルの重みを保存
 torch.save(model.state_dict(), 'retinanet_custom_weights_final.pth')
