@@ -113,7 +113,7 @@ class RandomHorizontalFlipWithLandmarks:
         self.p = p #水平反転を行う確率
         self.W = W #画像の幅
         # ランドマーク順序交換
-        self.point_swap_map = {0: 1, 1: 0, 2: 3, 3: 2, 5: 7, 7: 5} 
+        self.point_swap_map = {0: 3, 3: 0, 1: 2, 2: 1, 5: 6, 6: 5}
 
     def __call__(self, img, landmarks_tensor):
         if torch.rand(1) < self.p:
@@ -574,7 +574,7 @@ def train_model():
     
     with open(TRAIN_LOG_FILE, 'w') as f:
         # ヘッダー行を記述
-        f.write("Epoch,Train_Loss(MSE),Train_NME,Test_Loss(MSE),Test_NME\n")
+         f.write("Epoch,Train_Loss(MSE),Train_NME,Test_Loss(MSE),Test_NME\n")
         
     print(f"訓練・評価ログファイルを準備中: {TRAIN_LOG_FILE}")
 
@@ -609,10 +609,11 @@ def train_model():
         test_losses.append(test_loss)
         test_nmes.append(test_nme) 
 
-        log_line = f"Epoch {epoch+1}/{NUM_EPOCHS}: Test NME = {test_nme:.6f}\n"
-        with open(NME_LOG_FILE, 'a') as f:
-            f.write(log_line)
-        
+        with open(TRAIN_LOG_FILE, 'a') as f:
+            f.write(
+            f"{epoch+1},{avg_train_loss:.6f},{train_nme_epoch:.6f},"
+            f"{test_loss:.6f},{test_nme:.6f}\n"
+        )
         print(f"--- Epoch [{epoch+1}/{NUM_EPOCHS}] 完了. Train Loss: {avg_train_loss:.4f}, Train NME: {train_nme_epoch:.4f}, Test Loss: {test_loss:.4f}, Test NME: {test_nme:.4f} ---")
 
     # 最終評価とモデルの保存 
