@@ -70,41 +70,58 @@ class RandomAffineLandmarks:
         # せん断の角度
         shear = [0.0, 0.0]
         if self.shear is not None:
-            shear_x = float(torch.empty(1).uniform_(float(self.shear[0]), float(self.shear[1])).item())
-            shear = [shear_x, 0.0] 
+            shear_x = float(torch.empty(1).uniform_(self.shear[0], self.shear[1]).item())
+            shear_y = float(torch.empty(1).uniform_(self.shear[0], self.shear[1]).item())
+            shear = [shear_x, shear_y]
 
         return angle, translate, scale_factor, shear
 
-    def __call__(self, img, landmarks_tensor):
-        #パラメータ取得
-        angle, translate, scale_factor, shear = self.get_params()
-        #パラメータをもとに画像変換
-        img_transformed = F.affine(
-            img, angle=angle, translate=translate, scale=scale_factor, shear=shear, 
-            interpolation=Image.BICUBIC,  
-            fill=0                        
-        )
-        
-        # ランドマーク座標[x1,y1,x2,y2,...]の変換 
-        landmarks_reshaped = landmarks_tensor.reshape(-1, 2).double()
-        # 中心を(0, 0)に移動
-        landmarks_centered = landmarks_reshaped - torch.tensor(self.center, dtype=torch.float64)
-        # 回転を適用
-        angle_rad = np.deg2rad(angle)
-        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
-        R = torch.tensor([[cos_a, -sin_a], [sin_a, cos_a]], dtype=torch.float64)
-        rotated_centered = landmarks_centered @ R.T
-        
-        # 拡大縮小を適用
-        scaled_centered = rotated_centered * scale_factor
-        
-        # 中心を元に戻す
-        rotated_landmarks = scaled_centered + torch.tensor(self.center, dtype=torch.float64)
 
-        # 平行移動を適用
-        translated_landmarks = rotated_landmarks + torch.tensor(translate, dtype=torch.float64)
-        
-        return img_transformed, translated_landmarks.flatten().float()
+    def __call__(self, img, landmarks):
+    # パラメータ取得
+    angle, translate, scale_factor, shear = self.get_params()
+
+    # 画像変換
+    img_transformed = F.affine(
+        img, angle=angle, translate=translate, scale=scale_factor, shear=shear, 
+        interpolation=Image.BICUBIC, fill=0
+    )
+
+    # ランドマーク変換 
+    pts = landmarks.reshape(-1, 2).double()
+
+    # 中心を(0, 0)に移動
+    center_tensor = torch.tensor(self.center, dtype=torch.float64)
+    pts = pts - center_tensor
+
+    # 回転を適用
+    angle_rad = np.deg2rad(angle)
+    R = torch.tensor([
+        [np.cos(angle_rad), -np.sin(angle_rad)],
+        [np.sin(angle_rad),  np.cos(angle_rad)]
+    ], dtype=torch.float64)
+    pts = pts @ R.T
+
+    # 拡大縮小を適用
+    pts = pts * scale_factor
+
+    # シアー
+    shear_x_rad = np.deg2rad(shear[0])
+    shear_y_rad = np.deg2rad(shear[1])
+    S = torch.tensor([
+        [1.0, np.tan(shear_x_rad)],
+        [np.tan(shear_y_rad), 1.0]
+    ], dtype=torch.float64)
+    pts = pts @ S.T
+
+    # 中心を元に戻す
+    pts = pts + center_tensor
+
+    # 平行移動を適用
+    translate_tensor = torch.tensor(translate, dtype=torch.float64)
+    pts = pts + translate_tensor
+
+    return img_transformed, pts.flatten().float()
 
 
 class RandomHorizontalFlipWithLandmarks:
@@ -115,25 +132,25 @@ class RandomHorizontalFlipWithLandmarks:
         # ランドマーク順序交換
         self.point_swap_map = {0: 3, 3: 0, 1: 2, 2: 1, 5: 6, 6: 5}
 
-    def __call__(self, img, landmarks_tensor):
+    def __call__(self, img, landmarks):
         if torch.rand(1) < self.p:
             # 水平反転
             img = transforms.functional.hflip(img)
             
-            # 2. ランドマーク座標を反転
-            flipped_landmarks = landmarks_tensor.clone()
-            flipped_landmarks[::2] = self.W - flipped_landmarks[::2] #水平xのみ
+            # ランドマーク座標を反転
+            flipped = landmarks.clone()
+            flipped[::2] = (self.W - 1) - flipped[::2]
+
+            coords = flipped.reshape(-1, 2).clone()
             
             # ランドマーク順序交換
-            flipped_coords_reshaped = flipped_landmarks.reshape(-1, 2) 
-            new_coords = flipped_coords_reshaped.clone()
-            for original_idx, swap_idx in self.point_swap_map.items():
-                new_coords[swap_idx] = flipped_coords_reshaped[original_idx]
+            new_coords = coords.clone()
+            for src, dst in self.point_swap_map.items():
+                new_coords[dst] = coords[src]
             
-            return img, new_coords.flatten()
+            return img, new_coords.flatten().float()
         
-        return img, landmarks_tensor
-
+        return img, landmarks.clone().float()
 
 #データ拡張
 class LandmarkDataset(Dataset):
