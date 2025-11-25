@@ -78,50 +78,50 @@ class RandomAffineLandmarks:
 
 
     def __call__(self, img, landmarks):
-    # パラメータ取得
-    angle, translate, scale_factor, shear = self.get_params()
+        # パラメータ取得
+        angle, translate, scale_factor, shear = self.get_params()
 
-    # 画像変換
-    img_transformed = F.affine(
-        img, angle=angle, translate=translate, scale=scale_factor, shear=shear, 
-        interpolation=Image.BICUBIC, fill=0
-    )
+        # 画像変換
+        img_transformed = F.affine(
+            img, angle=angle, translate=translate, scale=scale_factor, shear=shear, 
+            interpolation=Image.BICUBIC, fill=0
+        )
 
-    # ランドマーク変換 
-    pts = landmarks.reshape(-1, 2).double()
+        # ランドマーク変換 
+        pts = landmarks.reshape(-1, 2).double()
 
-    # 中心を(0, 0)に移動
-    center_tensor = torch.tensor(self.center, dtype=torch.float64)
-    pts = pts - center_tensor
+        # 中心を(0, 0)に移動
+        center_tensor = torch.tensor(self.center, dtype=torch.float64)
+        pts = pts - center_tensor
 
-    # 回転を適用
-    angle_rad = np.deg2rad(angle)
-    R = torch.tensor([
-        [np.cos(angle_rad), -np.sin(angle_rad)],
-        [np.sin(angle_rad),  np.cos(angle_rad)]
-    ], dtype=torch.float64)
-    pts = pts @ R.T
+        # 回転を適用
+        angle_rad = np.deg2rad(angle)
+        R = torch.tensor([
+            [np.cos(angle_rad), -np.sin(angle_rad)],
+            [np.sin(angle_rad),  np.cos(angle_rad)]
+        ], dtype=torch.float64)
+        pts = pts @ R.T
 
-    # 拡大縮小を適用
-    pts = pts * scale_factor
+        # 拡大縮小を適用
+        pts = pts * scale_factor
 
-    # シアー
-    shear_x_rad = np.deg2rad(shear[0])
-    shear_y_rad = np.deg2rad(shear[1])
-    S = torch.tensor([
-        [1.0, np.tan(shear_x_rad)],
-        [np.tan(shear_y_rad), 1.0]
-    ], dtype=torch.float64)
-    pts = pts @ S.T
+        # シアー
+        shear_x_rad = np.deg2rad(shear[0])
+        shear_y_rad = np.deg2rad(shear[1])
+        S = torch.tensor([
+            [1.0, np.tan(shear_x_rad)],
+            [np.tan(shear_y_rad), 1.0]
+        ], dtype=torch.float64)
+        pts = pts @ S.T
 
-    # 中心を元に戻す
-    pts = pts + center_tensor
+        # 中心を元に戻す
+        pts = pts + center_tensor
 
-    # 平行移動を適用
-    translate_tensor = torch.tensor(translate, dtype=torch.float64)
-    pts = pts + translate_tensor
+        # 平行移動を適用
+        translate_tensor = torch.tensor(translate, dtype=torch.float64)
+        pts = pts + translate_tensor
 
-    return img_transformed, pts.flatten().float()
+        return img_transformed, pts.flatten().float()
 
 
 class RandomHorizontalFlipWithLandmarks:
