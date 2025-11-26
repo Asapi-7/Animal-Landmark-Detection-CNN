@@ -3,19 +3,19 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-from PIL import Image, ImageDraw, ImageFont # <--- ImageFont を追加
+from PIL import Image, ImageDraw, ImageFont 
 import glob
 from sklearn.model_selection import train_test_split
-import matplotlib.pyplot as plt # <--- Matplotlib を使用
+import matplotlib.pyplot as plt 
 from tqdm import tqdm
-import numpy as np # <--- NumPy を使用
+import numpy as np 
 
-# ターゲットサイズ (データセット作成コードと合わせる)
+
 IMG_SIZE = 224
 NUM_LANDMARKS = 9
 
 def load_landmarks_from_pts_to_tensor(pts_path):
-    """ .ptsファイルから9点のランドマーク座標を読み込み、平坦化されたTensor [18] で返す """
+   
     points = []
     with open(pts_path, 'r') as f:
         lines = f.readlines()
@@ -30,10 +30,9 @@ def load_landmarks_from_pts_to_tensor(pts_path):
     for line in lines[start_index : start_index + 9]:
         try:
             x, y = map(float, line.strip().split())
-            points.extend([x, y]) # [x1, y1, x2, y2, ...] の順 (18要素)
+            points.extend([x, y])
         except ValueError:
-             # 不正な行は無視
-             continue
+            continue
 
     if len(points) != 18:
           raise ValueError(f"Expected 18 coordinates (9 points), but found {len(points)} in {pts_path}")
@@ -42,14 +41,13 @@ def load_landmarks_from_pts_to_tensor(pts_path):
 
 
 class LandmarkDataset(Dataset):
-    # ファイルパスのリストを外部から受け取るよう修正 (train/test分割に必要)
+   
     def __init__(self, file_paths):
         self.image_files = file_paths
 
         # モデルへの入力に合わせた最終的な画像変換 (正規化)
         self.transform = transforms.Compose([
-            transforms.ToTensor(), # HWC -> CHW, 0-255 -> 0-1
-            # ImageNetの統計値で標準化
+            transforms.ToTensor(), 
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
@@ -66,10 +64,8 @@ class LandmarkDataset(Dataset):
         image = Image.open(img_path).convert("RGB") # 画像をRGBで読み込み
         transformed_image = self.transform(image) # 変換と正規化を実行
 
-        landmarks = load_landmarks_from_pts_to_tensor(pts_path) # 座標 [18] を読み込み
-
-        # 推論・描画のために元の画像パスも返す
-        return transformed_image, landmarks, img_path # <--- 変更: img_path を追加
+        landmarks = load_landmarks_from_pts_to_tensor(pts_path) 
+        return transformed_image, landmarks, img_path 
 
 
 
@@ -89,7 +85,6 @@ class BasicBlock(nn.Module):
         self.bn2 = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU(inplace=True)
 
-        # スキップ接続のダウンサンプリング (寸法合わせ)
         self.downsample = None
         if stride != 1 or in_channels != out_channels:
              self.downsample = nn.Sequential(
@@ -152,7 +147,7 @@ class ResNet18(nn.Module):
 
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
 
-        self.linear = nn.Linear(512, num_classes) # num_classesはここでは仮の値
+        self.linear = nn.Linear(512, num_classes) 
 
     
     def forward(self, x: torch.Tensor, return_embed: bool=False):
@@ -193,14 +188,12 @@ class LandmarkRegressor(nn.Module):
         return self.backbone(x)
 
 def evaluate_model(model, data_loader, criterion, device):
-    """テストデータセットに対する損失を計算し、モデルの精度を確認する"""
     model.eval()
     total_loss = 0
     total_nme = 0
     count = 0
 
     with torch.no_grad():
-        # データローダーのイテレーションを imgs, labels のみに変更 (img_path は評価に使わないため)
         for data in data_loader:
              imgs, labels = data[0].to(device), data[1].to(device)
              outputs = model(imgs)
@@ -221,10 +214,7 @@ def evaluate_model(model, data_loader, criterion, device):
 
 
 def calculate_normalization_factor(landmarks):
-    """ 
-    ランドマーク [N, 18] から、バウンディングボックスの対角線長を計算する。
-    """
-    # 座標を (N, 9, 2) に整形: (x1, y1, x2, y2, ...) -> ((x1, y1), (x2, y2), ...)
+    # 座標を (N, 9, 2) に整形
     coords = landmarks.reshape(-1, 9, 2)
     
     # バウンディングボックスの計算 (全点の min/max を使用)
@@ -269,10 +259,6 @@ def calculate_nme(outputs, labels, device):
 
 
 def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
-    """
-    PIL Image にランドマークを描画し、インデックス (1-9) を付与する
-    （save_landmark_predictions 関数内で Matplotlib に置き換わるため、直接は使用されない）
-    """
     draw = ImageDraw.Draw(image)
     
     try:
@@ -302,10 +288,6 @@ def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
 
 
 def save_landmark_predictions(model, data_loader, device, num_samples=5, save_dir="./predictions_output"):
-    """
-    テストデータに対して推論を行い、予測されたランドマークを画像に描画して保存する
-    （Matplotlib を使用して、円と線も描画する）
-    """
     model.eval()
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -399,7 +381,7 @@ def save_landmark_predictions(model, data_loader, device, num_samples=5, save_di
                 plt.savefig(save_path, bbox_inches='tight', pad_inches=0) # 余白なしで保存
                 plt.close(fig) # 現在の図を閉じてメモリを解放
                 
-                print(f"✅ 予測画像を保存: {save_path}")
+                print(f"予測画像を保存: {save_path}")
                 saved_count += 1
 
 
@@ -498,7 +480,7 @@ def train_model():
 
     # 最終テスト 
     final_test_loss, final_test_nme = evaluate_model(model, test_loader, criterion, device)
-    print(f"\n✅ Final Test Loss: {final_test_loss:.4f}, Final Test NME: {final_test_nme:.4f}")
+    print(f"\n Final Test Loss: {final_test_loss:.4f}, Final Test NME: {final_test_nme:.4f}")
 
     # CSV に final test を追加
     log_lines.append(f"FinalTest,{final_test_loss:.4f},{final_test_nme:.4f}")
