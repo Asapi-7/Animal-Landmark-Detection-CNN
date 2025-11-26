@@ -362,10 +362,10 @@ optimizer = optim.SGD(
 )
 
 # 学習率を下げる
-scheduler = MultiStepLR(
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer,
-    milestones=[10, 15],   # 10 epoch で lr を下げ、15 epoch でさらに下げる
-    gamma=0.1              # 1/10 に減衰
+    T_max=20,
+    eta_min=1e-6
 )
 
 #---------------------------------------------------------------------------
@@ -461,8 +461,6 @@ for epoch in range(num_epochs):
     tqdm.write(f"--- Epoch [{epoch}/{num_epochs}] 完了。 平均損失: {total_epoch_loss / len(train_loader):.4f}s ---")
     avg_train_loss = total_epoch_loss / len(train_loader)
 
-    scheduler.step()
-
     ### --- テストロス計算ループ ---###
     model.train()   
     test_loss = 0.0
@@ -481,6 +479,8 @@ for epoch in range(num_epochs):
 
     avg_test_loss = test_loss / len(test_loader)
     print(f"Epoch {epoch+1} Test Loss: {avg_test_loss:.4f}")
+
+    scheduler.step()
 
 #------------------------------------------------------------------------------------
 
