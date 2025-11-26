@@ -27,6 +27,8 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split # データ分割用
 from PIL import Image # 画像ファイルの読み込みとRBG変換
 import random # データ拡張
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 #----------------------------------------------------------------------------------
 # データセットを整えるクラス
@@ -38,6 +40,18 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         self.imgs = img_list # 画像パスのリストを保持する
         self.augment = augment # データ拡張用
         self.color_transform = T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.02 ) # 色変換用
+        self.augment_transform = A.Compose([ # データ拡張
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.1),
+            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.02, p=0.5),
+            A.ShiftScaleRotate(shift_limit=0.02, scale_limit=0.05, rotate_limit=5, border_mode=0, p=0.4),
+            ToTensorV2()
+        ], 
+        bbox_params=A.BboxParams(
+            format='pascal_voc',
+            label_fields=['labels'],
+            min_visibility=0.5,
+        ))
 
     # バウンディングボックスの情報を抽出する    
     def _parse_pts(self, pts_path):
@@ -102,6 +116,39 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         # BBox読み込み
         boxes_np, labels_np = self._parse_pts(pts_path)
 
+        # --- Albumentations augment ---
+        if self.augment and boxes_np.size > 0:
+            augmented = self.augment_transform(
+                image=np.array(img),
+                bboxes=boxes_np.tolist(),
+                labels=labels_np.tolist()
+            )
+            img = augmented['image']
+            boxes_np = np.array(augmented['bboxes'], dtype=np.float32)
+            labels_np = np.array(augmented['labels'], dtype=np.int64)
+
+        else:
+            img = T.functional.to_tensor(img)
+
+        if boxes_np.size == 0:
+            boxes = torch.empty((0,4), dtype=torch.float32)
+            labels = torch.empty((0,), dtype=torch.int64)
+        else:
+            boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
+            labels = torch.as_tensor(labels_np, dtype=torch.int64)
+
+        target = {
+            "boxes": boxes,
+            "labels": labels,
+            "image_id": torch.tensor([idx]),
+        }
+
+        return img, target
+
+    def __len__(self):
+        return len(self.imgs)
+    
+        """
         # データ拡張
         if self.augment and boxes_np.size > 0:
 
@@ -150,6 +197,7 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         } # ターゲット辞書の構築
 
         return img, target
+        """
     
     # データセットのサイズを返す
     def __len__(self):
