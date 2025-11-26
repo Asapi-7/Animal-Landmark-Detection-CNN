@@ -473,7 +473,7 @@ for epoch in range(num_epochs):
     avg_test_loss = test_loss / len(test_loader)
     print(f"Epoch {epoch+1} Test Loss: {avg_test_loss:.4f}")
 
-scheduler.step()
+    scheduler.step()
 
 #------------------------------------------------------------------------------------
 
