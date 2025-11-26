@@ -460,9 +460,9 @@ def train_model():
         return
     
    
-    train_dataset = LandmarkDataset(train_files, is_train=True) 
+    train_dataset = LandmarkDataset(train_files) 
   
-    test_dataset = LandmarkDataset(test_files, is_train=False) 
+    test_dataset = LandmarkDataset(test_files) 
         
     train_loader = DataLoader(
         train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4
