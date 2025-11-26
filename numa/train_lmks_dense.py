@@ -12,6 +12,7 @@ from tqdm import tqdm
 import numpy as np 
 
 
+
 IMG_SIZE = 224
 NUM_LANDMARKS = 9
 
@@ -42,279 +43,181 @@ def load_landmarks_from_pts_to_tensor(pts_path):
     return torch.tensor(points, dtype=torch.float32)
 
 
-#  幾何学的拡張クラス (座標変換を伴う) の定義
-class RandomAffineLandmarks:
-    def __init__(self, degrees, translate, scale_ranges, shear, W=IMG_SIZE):
-        self.W = W #画像の幅
-        self.degrees = degrees #degrees:回転角度
-        self.translate = translate  #translate:平行移動の比率
-        self.scale_ranges = scale_ranges #scale_ranges:拡大縮小率
-        self.shear = shear #せん断の角度
-        self.center = (W / 2, W / 2) # 画像の中心 
-
-    def get_params(self): #ランダムパラメータ生成
-        # 回転角度
-        angle = float(torch.empty(1).uniform_(float(self.degrees[0]), float(self.degrees[1])).item())
-        
-        # 平行移動のピクセル
-        max_dx = self.translate[0] * self.W
-        max_dy = self.translate[1] * self.W
-        translate = [
-            float(torch.empty(1).uniform_(-max_dx, max_dx).item()),
-            float(torch.empty(1).uniform_(-max_dy, max_dy).item())
-        ]
-
-        # 拡大縮小率
-        scale_factor = float(torch.empty(1).uniform_(self.scale_ranges[0], self.scale_ranges[1]).item())
-        
-        # せん断の角度
-        shear = [0.0, 0.0]
-        if self.shear is not None:
-            shear_x = float(torch.empty(1).uniform_(self.shear[0], self.shear[1]).item())
-            shear_y = float(torch.empty(1).uniform_(self.shear[0], self.shear[1]).item())
-            shear = [shear_x, shear_y]
-
-        return angle, translate, scale_factor, shear
-
-
-    def __call__(self, img, landmarks):
-        # パラメータ取得
-        angle, translate, scale_factor, shear = self.get_params()
-
-        # 画像変換
-        img_transformed = F.affine(
-            img, angle=angle, translate=translate, scale=scale_factor, shear=shear, 
-            interpolation=Image.BICUBIC, fill=0
-        )
-
-        # ランドマーク変換 
-        pts = landmarks.reshape(-1, 2).double()
-
-        # 中心を(0, 0)に移動
-        center_tensor = torch.tensor(self.center, dtype=torch.float64)
-        pts = pts - center_tensor
-
-        # 回転を適用
-        angle_rad = np.deg2rad(angle)
-        R = torch.tensor([
-            [np.cos(angle_rad), -np.sin(angle_rad)],
-            [np.sin(angle_rad),  np.cos(angle_rad)]
-        ], dtype=torch.float64)
-        pts = pts @ R.T
-
-        # 拡大縮小を適用
-        pts = pts * scale_factor
-
-        # シアー
-        shear_x_rad = np.deg2rad(shear[0])
-        shear_y_rad = np.deg2rad(shear[1])
-        S = torch.tensor([
-            [1.0, np.tan(shear_x_rad)],
-            [np.tan(shear_y_rad), 1.0]
-        ], dtype=torch.float64)
-        pts = pts @ S.T
-
-        # 中心を元に戻す
-        pts = pts + center_tensor
-
-        # 平行移動を適用
-        translate_tensor = torch.tensor(translate, dtype=torch.float64)
-        pts = pts + translate_tensor
-
-        return img_transformed, pts.flatten().float()
-
-
-class RandomHorizontalFlipWithLandmarks:
-    #水平反転とランドマーク座標変換
-    def __init__(self, p=0.5, W=IMG_SIZE):
-        self.p = p #水平反転を行う確率
-        self.W = W #画像の幅
-        # ランドマーク順序交換
-        self.point_swap_map = {0: 3, 3: 0, 1: 2, 2: 1, 5: 6, 6: 5}
-
-    def __call__(self, img, landmarks):
-        if torch.rand(1) < self.p:
-            # 水平反転
-            img = transforms.functional.hflip(img)
-            
-            # ランドマーク座標を反転
-            flipped = landmarks.clone()
-            flipped[::2] = (self.W - 1) - flipped[::2]
-
-            coords = flipped.reshape(-1, 2).clone()
-            
-            # ランドマーク順序交換
-            new_coords = coords.clone()
-            for src, dst in self.point_swap_map.items():
-                new_coords[dst] = coords[src]
-            
-            return img, new_coords.flatten().float()
-        
-        return img, landmarks.clone().float()
-
-#データ拡張
 class LandmarkDataset(Dataset):
-    def __init__(self, file_paths, is_train=False): 
-        self.image_files = file_paths 
-        self.is_train = is_train #データセットが訓練用で使用されているか
-        #正規化
-        final_transforms = [
-            transforms.ToTensor(), 
+    # ファイルパスのリストを外部から受け取るよう修正 (train/test分割に必要)
+    def __init__(self, file_paths):
+        self.image_files = file_paths
+
+        # モデルへの入力に合わせた最終的な画像変換 (正規化)
+        self.transform = transforms.Compose([
+            transforms.ToTensor(), # HWC -> CHW, 0-255 -> 0-1
+            # ImageNetの統計値で標準化
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ]
-        
-        if is_train:
-            # 画素値拡張 
-            self.transform_tensor = transforms.Compose([
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2), # 色ジッター
-                transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0)),              # ガウシアンブラー
-            ] + final_transforms)
-            
-            # 幾何学的拡張
-            self.affine_transform = RandomAffineLandmarks(
-                degrees=(-10, 10), translate=(0.05, 0.05), # ランダム回転と平行移動
-                scale_ranges=(0.95, 1.05), shear=(-5, 5)   # 拡大縮小とシアー
-            )
-            self.hflip_transform = RandomHorizontalFlipWithLandmarks(p=0.5, W=IMG_SIZE)
-            
-        else: #テスト時は拡張なし
-            self.transform_tensor = transforms.Compose(final_transforms)
-            self.affine_transform = None
-            self.hflip_transform = None
+        ])
 
-
-    def __len__(self): 
+    def __len__(self):
         return len(self.image_files)
 
     def __getitem__(self, idx):
         img_path = self.image_files[idx]
+        
+        # .pts ファイルパスを .jpg パスから構築
         pts_path = img_path.replace(".jpg", ".pts") 
 
-        image = Image.open(img_path).convert("RGB") 
-        landmarks = load_landmarks_from_pts_to_tensor(pts_path) 
+        # 訓練用画像 (正規化済み)
+        image = Image.open(img_path).convert("RGB") # 画像をRGBで読み込み
+        transformed_image = self.transform(image) # 変換と正規化を実行
 
-        # 幾何学的拡張の適用 
-        if self.is_train:
-            # ランダム水平反転
-            image, landmarks = self.hflip_transform(image, landmarks) 
-            # ランダムアフィン変換 (回転、平行移動、スケール、シアー)
-            image, landmarks = self.affine_transform(image, landmarks) 
-        
-        # 画素値拡張の適用
-        transformed_image = self.transform_tensor(image) 
+        landmarks = load_landmarks_from_pts_to_tensor(pts_path) # 座標 [18] を読み込み
 
-        return transformed_image, landmarks, img_path 
+        # 推論・描画のために元の画像パスも返す
+        return transformed_image, landmarks, img_path # <--- 変更: img_path を追加
 
-#Resnet18
-class BasicBlock(nn.Module): #残差ブロック
-    def __init__(self, in_channels: int, out_channels: int,
-                 stride: int=1):
+
+
+class DenseLayer(nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        growth_rate,
+        drop_rate,
+    ):
         super().__init__()
+        self.norm1 = nn.BatchNorm2d(in_channels)
+        self.relu1 = nn.ReLU(inplace=True)
+        self.conv1 = nn.Conv2d(in_channels, growth_rate * 4, kernel_size=1, bias=False)
+        self.norm2 = nn.BatchNorm2d(growth_rate * 4)
+        self.relu2 = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(growth_rate * 4, growth_rate, kernel_size=3, padding=1, bias=False)
+        self.dropout = nn.Dropout(p=drop_rate)
 
-        self.conv1 = nn.Conv2d(in_channels, out_channels,
-                               kernel_size=3, stride=stride,
-                               padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels,
-                               kernel_size=3, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
-
-        # スキップ接続
-        self.downsample = None
-        if stride != 1 or in_channels != out_channels:
-             self.downsample = nn.Sequential(
-                 nn.Conv2d(in_channels, out_channels, kernel_size=1,
-                           stride=stride, bias=False),
-                 nn.BatchNorm2d(out_channels)
-             )
-
-    #順伝播関数
-    def forward(self, x: torch.Tensor):
-        identity = x 
-
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        if self.downsample is not None:
-             identity = self.downsample(identity)
-
-        # 残差写像と恒等写像の要素毎の和を計算
-        out += identity
-
-        out = self.relu(out)
-
-        return out
-
-class ResNet18(nn.Module):
-    def __init__(self, num_classes: int):
-        super().__init__()
-
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2,
-                               padding=3, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU(inplace=True)
-
-        self.max_pool = nn.MaxPool2d(kernel_size=3,
-                                     stride=2, padding=1)
-
-        self.layer1 = nn.Sequential(
-            BasicBlock(64, 64),
-            BasicBlock(64, 64),
-        )
-        self.layer2 = nn.Sequential(
-            BasicBlock(64, 128, stride=2),
-            BasicBlock(128, 128),
-        )
-        self.layer3 = nn.Sequential(
-            BasicBlock(128, 256, stride=2),
-            BasicBlock(256, 256),
-        )
-        self.layer4 = nn.Sequential(
-            BasicBlock(256, 512, stride=2),
-            BasicBlock(512, 512),
-        )
-
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-
-        self.linear = nn.Linear(512, num_classes)
-
-    def forward(self, x: torch.Tensor, return_embed: bool=False):
+    def forward(self, x):
+        x = torch.cat(x, 1)
+        x = self.norm1(x)
+        x = self.relu1(x)
         x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.max_pool(x)
 
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-
-        x = self.avg_pool(x)
-        x = x.flatten(1)
-
-        if return_embed:
-            return x
-
-        x = self.linear(x)
+        x = self.norm2(x)
+        x = self.relu2(x)
+        x = self.conv2(x)
+        x = self.dropout(x)
 
         return x
+
+
+class DenseBlock(nn.ModuleDict):
+    def __init__(
+        self,
+        num_layers,
+        in_channels,
+        growth_rate,
+        drop_rate,
+    ):
+        super().__init__()
+        for i in range(num_layers):
+            layer = DenseLayer(
+                in_channels + i * growth_rate,
+                growth_rate=growth_rate,
+                drop_rate=drop_rate,
+            )
+            self.add_module(f"denselayer{i + 1}", layer)
+
+    def forward(self, x0):
+        x = [x0]
+        for name, layer in self.items():
+            out = layer(x)
+            x.append(out)
+
+        return torch.cat(x, 1)
+
+class TransitionLayer(nn.Sequential):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.add_module("norm", nn.BatchNorm2d(in_channels))
+        self.add_module("relu", nn.ReLU(inplace=True))
+        self.add_module("conv", nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False))
+        self.add_module("pool", nn.AvgPool2d(kernel_size=2, stride=2))
+
+
+class DenseNet(nn.Module):
+    def __init__(
+        self,
+        growth_rate,
+        block_config,
+        drop_rate=0,
+        num_classes=1000,
+    ):
+        super().__init__()
+
+        # 最初の畳み込み層を追加する。
+        self.features = nn.Sequential()
+        self.features.add_module(
+            "conv0", nn.Conv2d(3, 2 * growth_rate, kernel_size=7, stride=2, padding=3, bias=False)
+        )
+        self.features.add_module("norm0", nn.BatchNorm2d(2 * growth_rate))
+        self.features.add_module("relu0", nn.ReLU(inplace=True))
+        self.features.add_module("pool0", nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+
+        # Dense Block 及び Transition Layer を作成する。
+        in_channels = 2 * growth_rate
+        for i, num_layers in enumerate(block_config):
+            block = DenseBlock(
+                num_layers=num_layers,
+                in_channels=in_channels,
+                growth_rate=growth_rate,
+                drop_rate=drop_rate,
+            )
+            self.features.add_module(f"denseblock{i + 1}", block)
+
+            in_channels = in_channels + num_layers * growth_rate
+            if i != len(block_config) - 1:
+                # 最後の Dense Block でない場合は、Transition Layer を追加する。
+                trans = TransitionLayer(in_channels=in_channels, out_channels=in_channels // 2)
+                self.features.add_module(f"transition{i + 1}", trans)
+                in_channels = in_channels // 2
+
+        self.features.add_module("norm5", nn.BatchNorm2d(in_channels))
+        self.features.add_module("relu5", nn.ReLU(inplace=True))
+        self.features.add_module("pool5", nn.AdaptiveAvgPool2d((1, 1)))
+
+        self.classifier = nn.Linear(in_channels, num_classes)
+
+        # 重みを初期化する。
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight)
+            elif isinstance(m, nn.Linear):
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        features = self.features(x)
+        out = torch.flatten(features, 1)
+        out = self.classifier(out)
+        return out
+
+
+
+
+def densenet121():
+    return DenseNet(growth_rate=32, block_config=(6, 12, 24, 16))
+
+
 
 class LandmarkRegressor(nn.Module):
     def __init__(self, num_landmarks=9):
         super(LandmarkRegressor, self).__init__()
         
-        # 1. Backbone:ResNet18を使用
-        self.backbone = ResNet18(num_classes=1000)
+        # 1. Backbone
+        self.backbone = densenet121()
         
         # 2. Head: Dense層 (最終層) の変更
-        num_features = self.backbone.linear.in_features
+        num_features = self.backbone.classifier.in_features
         
         # 3. 出力層をランドマークの数 (18) に置き換え 
-        self.backbone.linear = nn.Linear(num_features, num_landmarks * 2)
+        self.backbone.classifier = nn.Linear(num_features, num_landmarks * 2)
 
     def forward(self, x):
         return self.backbone(x)
@@ -557,9 +460,9 @@ def train_model():
         return
     
    
-    train_dataset = LandmarkDataset(train_files, is_train=True) 
+    train_dataset = LandmarkDataset(train_files) 
   
-    test_dataset = LandmarkDataset(test_files, is_train=False) 
+    test_dataset = LandmarkDataset(test_files) 
         
     train_loader = DataLoader(
         train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4

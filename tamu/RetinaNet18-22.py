@@ -13,7 +13,6 @@ from torch.utils.data import DataLoader # データローダーの定義と使�
 from torchvision import transforms as T # 画像変換(Tensorに)
 from torchvision.ops import box_iou # IoUの計算(IoU：)
 from torchvision import transforms
-from torch.optim.lr_scheduler import MultiStepLR
 
 # モデル構築用
 from resnet18_backbone import resnet18 # ResNet18のバックボーン
@@ -28,8 +27,6 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split # データ分割用
 from PIL import Image # 画像ファイルの読み込みとRBG変換
 import random # データ拡張
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
 
 #----------------------------------------------------------------------------------
 # データセットを整えるクラス
@@ -41,18 +38,6 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         self.imgs = img_list # 画像パスのリストを保持する
         self.augment = augment # データ拡張用
         self.color_transform = T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.02 ) # 色変換用
-        self.augment_transform = A.Compose([ # データ拡張
-            A.HorizontalFlip(p=0.5),
-            A.VerticalFlip(p=0.1),
-            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.02, p=0.5),
-            A.ShiftScaleRotate(shift_limit=0.02, scale_limit=0.05, rotate_limit=5, border_mode=0, p=0.4),
-            ToTensorV2()
-        ], 
-        bbox_params=A.BboxParams(
-            format='pascal_voc',
-            label_fields=['labels'],
-            min_visibility=0.5,
-        ))
 
     # バウンディングボックスの情報を抽出する    
     def _parse_pts(self, pts_path):
@@ -88,6 +73,10 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         if len(xs) >= 2 and len(ys) >= 2:
             xmin, xmax = min(xs), max(xs)
             ymin, ymax = min(ys), max(ys)
+
+            if xmax - xmin < 1 or ymax - ymin < 1:
+                return np.empty((0, 4), dtype=np.float32), np.empty((0,), dtype=np.int64)
+
             boxes = np.array([[xmin, ymin, xmax, ymax]], dtype=np.float32)
             labels = np.array([1], dtype=np.int64)  # 全て1にして単一クラス扱い
         else:
@@ -113,49 +102,8 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         # BBox読み込み
         boxes_np, labels_np = self._parse_pts(pts_path)
 
-        if boxes_np.size > 0:
-            x1, y1, x2, y2 = boxes_np[0]
-            if x2 - x1 < 1 or y2 - y1 < 1:
-                boxes_np = np.empty((0, 4), dtype=np.float32)
-                labels_np = np.empty((0,), dtype=np.int64)
-
-        # --- Albumentations augment ---
-        if self.augment and boxes_np.size > 0:
-            augmented = self.augment_transform(
-                image=np.array(img),
-                bboxes=boxes_np.tolist(),
-                labels=labels_np.tolist()
-            )
-            img = augmented['image']
-            boxes_np = np.array(augmented['bboxes'], dtype=np.float32)
-            labels_np = np.array(augmented['labels'], dtype=np.int64)
-
-        else:
-            img = T.functional.to_tensor(img)
-
-        if boxes_np.size == 0:
-            boxes = torch.empty((0,4), dtype=torch.float32)
-            labels = torch.empty((0,), dtype=torch.int64)
-        else:
-            boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
-            labels = torch.as_tensor(labels_np, dtype=torch.int64)
-
-        target = {
-            "boxes": boxes,
-            "labels": labels,
-            "image_id": torch.tensor([idx]),
-        }
-
-        return img, target
-
-    def __len__(self):
-        return len(self.imgs)
-
-
-    """
         # データ拡張
         if self.augment and boxes_np.size > 0:
-
 
             x1, y1, x2, y2 = boxes_np[0]
             
@@ -187,7 +135,6 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
             else:
                 img = T.functional.to_tensor(img)
 
-
         # ターゲット辞書の作成
         if boxes_np.size == 0: # バウンディングボックスが空なら空のテンソルを作成
             boxes = torch.empty((0, 4), dtype=torch.float32)
@@ -207,8 +154,6 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
     # データセットのサイズを返す
     def __len__(self):
         return len(self.imgs)
-
-    """
 
 # 前処理(Transforms)の定義
 def get_transform(train):
@@ -353,19 +298,11 @@ model = RetinaNet(
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 model.to(device)
 
-# オプティマイザの定義 (SGD：確率的勾配降下法) ハイパーパラメータ
-optimizer = optim.SGD(
-    model.parameters(), 
-    lr=0.01, # 学習率
-    momentum=0.9,
-    weight_decay=0.0005 # 過学習防止
-)
-
-# 学習率を下げる
-scheduler = MultiStepLR(
-    optimizer,
-    milestones=[10, 15],   # 10 epoch で lr を下げ、15 epoch でさらに下げる
-    gamma=0.1              # 1/10 に減衰
+# オプティマイザの定義 (Adam:)　ハイパーパラメータ
+optimizer = optim.Adam(
+    model.parameters(),
+    lr=0.0001,
+    weight_decay=0.0001
 )
 
 #---------------------------------------------------------------------------
@@ -461,8 +398,6 @@ for epoch in range(num_epochs):
     tqdm.write(f"--- Epoch [{epoch}/{num_epochs}] 完了。 平均損失: {total_epoch_loss / len(train_loader):.4f}s ---")
     avg_train_loss = total_epoch_loss / len(train_loader)
 
-    scheduler.step()
-
     ### --- テストロス計算ループ ---###
     model.train()   
     test_loss = 0.0
@@ -489,3 +424,5 @@ torch.save(model.state_dict(), 'retinanet_custom_weights_final.pth')
 
 # 学習後にIoUを評価
 evaluate_retinanet(model, test_loader, device, iou_threshold=0.5)
+
+
