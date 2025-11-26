@@ -44,11 +44,8 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         self.augment_transform = A.Compose([ # データ拡張
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.1),
-            A.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.03, p=0.7),
-            A.Perspective(scale=(0.05, 0.1), keep_size=True, p=0.4),
-            A.Rotate(limit=10, border_mode=0, p=0.5),
-            A.RandomScale(scale_limit=0.2, p=0.4),
-            A.ShiftScaleRotate(shift_limit=0.02, scale_limit=0.0, rotate_limit=0, border_mode=0, p=0.5),
+            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.02, p=0.5),
+            A.ShiftScaleRotate(shift_limit=0.02, scale_limit=0.05, rotate_limit=5, border_mode=0, p=0.4),
             ToTensorV2()
         ], 
         bbox_params=A.BboxParams(
