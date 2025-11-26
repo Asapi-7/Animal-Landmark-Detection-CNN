@@ -45,9 +45,7 @@ class LandmarkDataset(Dataset):
     def __init__(self, file_paths):
         self.image_files = file_paths
 
-        # モデルへの入力に合わせた最終的な画像変換 (正規化)
         self.transform = transforms.Compose([
-            transforms.ToTensor(), 
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
@@ -55,17 +53,25 @@ class LandmarkDataset(Dataset):
         return len(self.image_files)
 
     def __getitem__(self, idx):
-        img_path = self.image_files[idx]
+        image_path = self.image_files[idx]
+        target = self.targets[idx]
+
+        # Pillow で読み取り
+        image = Image.open(image_path).convert("RGB")
         
-        # .pts ファイルパスを .jpg パスから構築
-        pts_path = img_path.replace(".jpg", ".pts") 
+        # Resize は PIL のうちに適用
+        image = image.resize((IMG_SIZE, IMG_SIZE))
 
-        # 訓練用画像 (正規化済み)
-        image = Image.open(img_path).convert("RGB") # 画像をRGBで読み込み
-        transformed_image = self.transform(image) # 変換と正規化を実行
+        # ToTensor を自前でやる
+        image = np.array(image, dtype=np.float32)
+        image = image.transpose(2, 0, 1)
+        image = torch.from_numpy(image) / 255.0
 
-        landmarks = load_landmarks_from_pts_to_tensor(pts_path) 
-        return transformed_image, landmarks, img_path 
+        # 残りの transform（Normalize だけ）
+        if self.transform is not None:
+            image = self.transform(image)
+
+        return image, target, image_path
 
 
 
