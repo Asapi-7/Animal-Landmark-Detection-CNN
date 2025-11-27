@@ -373,19 +373,6 @@ def calculate_nme(outputs, labels, device):
 
     return nme
 
-#損失曲線
-def plot_loss_curve(train_losses, test_losses, num_epochs):
-    plt.figure(figsize=(10, 6))
-    plt.plot(range(1, num_epochs + 1), train_losses, label='Train Loss (MSE)', marker='o')
-    if test_losses:
-        plt.plot(range(1, num_epochs + 1), test_losses, label='Test Loss (MSE)', marker='s')
-    
-    plt.title('Training and Test Loss Curve')
-    plt.xlabel('Epoch')
-    plt.ylabel('Mean Squared Error (MSE) Loss')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
 
 #ランドマーク描画
 def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
@@ -623,9 +610,7 @@ def train_model():
     torch.save(model.state_dict(), MODEL_PATH_SAVE)
     print(f"モデルが '{MODEL_PATH_SAVE}' として保存されました。")
     
-    print("\n--- 学習曲線を表示 ---")
-    plot_loss_curve(train_losses, test_losses, NUM_EPOCHS)
-    
+   
     return model, test_loader, device
 
 
