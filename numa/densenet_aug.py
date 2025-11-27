@@ -497,22 +497,22 @@ def save_landmark_predictions(model, data_loader, device, num_samples=5, save_di
 
 
 def train_model():
-    DATA_DIR = "./cropped_dataset" # 訓練データセットのパス
-    TEST_SIZE = 0.2 # テストデータの割合 (20%)
+    DATA_DIR = "./cropped_dataset"
+    TEST_SIZE = 0.2
     BATCH_SIZE = 32
     NUM_LANDMARKS = 9
     NUM_EPOCHS = 20
     LEARNING_RATE = 0.001
     
-  
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"訓練デバイス: {device}")
     
     
+    # --- データ準備 ---
     try:
         all_files = glob.glob(os.path.join(DATA_DIR, "*.jpg"))
         if not all_files:
-             raise FileNotFoundError("データセット内に.jpgファイルが見つかりません。")
+            raise FileNotFoundError("データセット内に.jpgファイルが見つかりません。")
         
         train_files, test_files = train_test_split(
             all_files, test_size=TEST_SIZE, random_state=42
@@ -522,96 +522,86 @@ def train_model():
         
     except Exception as e:
         print(f"データセットの準備エラー: {e}")
-        print("cropped_dataset フォルダが./ (カレントディレクトリ) に存在し、データが揃っているか確認してください。")
         return
     
-   
-    train_dataset = LandmarkDataset(train_files) 
-  
-    test_dataset = LandmarkDataset(test_files) 
-        
-    train_loader = DataLoader(
-        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0
-    )
     
-    test_loader = DataLoader(
-        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0
-    )
+    train_dataset = LandmarkDataset(train_files)
+    test_dataset = LandmarkDataset(test_files)
     
-    model = LandmarkRegressor(num_landmarks=NUM_LANDMARKS)
-    model.to(device)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
     
-    criterion = nn.MSELoss() 
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    
-    # 記録用リスト 
-    train_losses = []
-    test_losses = []
 
-    train_nmes = []
-    test_nmes = [] 
-    
-    # 4つの値を保存するためのログファイル
+    # --- モデル・損失・最適化 ---
+    model = LandmarkRegressor(num_landmarks=NUM_LANDMARKS).to(device)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+
+
+    # --- ログ準備 ---
     TRAIN_LOG_FILE = os.path.join(os.getcwd(), 'densenet_aug_log.txt')
-    
-    # 古いログをクリアし、ヘッダーを書き込む
+
     if os.path.exists(TRAIN_LOG_FILE):
         os.remove(TRAIN_LOG_FILE)
-    
-    with open(TRAIN_LOG_FILE, 'w') as f:
-        # ヘッダー行を記述
-         f.write("Epoch,Train_Loss(MSE),Train_NME,Test_Loss(MSE),Test_NME\n")
-        
-    print(f"訓練・評価ログファイルを準備中: {TRAIN_LOG_FILE}")
 
-    # 訓練ループ 
+    with open(TRAIN_LOG_FILE, 'w') as f:
+        f.write("Epoch,Train_Loss(MSE),Train_NME,Test_Loss(MSE),Test_NME\n")
+
+    print(f"訓練・評価ログファイルを準備: {TRAIN_LOG_FILE}")
+
     print("\n--- 訓練開始 ---")
-    
+
+    # --- 学習ループ ---
     for epoch in range(NUM_EPOCHS):
-        model.train() 
+        model.train()
         running_loss = 0.0
-        
-        # 進捗表示
-        for i, (images, targets, _) in enumerate(tqdm(train_loader, desc=f"Epoch [{epoch+1}/{NUM_EPOCHS}]")):
+        running_nme = 0.0
+
+        # 学習（forward/backward）
+        for images, targets, _ in tqdm(train_loader, desc=f"Epoch [{epoch+1}/{NUM_EPOCHS}]"):
             images = images.to(device)
             targets = targets.to(device)
-            
+
             optimizer.zero_grad()
             outputs = model(images)
+
             loss = criterion(outputs, targets)
             loss.backward()
             optimizer.step()
-            running_loss += loss.item()
-            
-        avg_train_loss = running_loss / len(train_loader)
-        train_losses.append(avg_train_loss)
-        
-        # 訓練データでの評価（NMEを計算）
-        train_loss_epoch, train_nme_epoch = evaluate_model(model, train_loader, criterion, device)
-        train_nmes.append(train_nme_epoch)
-        
-        #テストデータでの評価 
-        test_loss, test_nme = evaluate_model(model, test_loader, criterion, device)
-        test_losses.append(test_loss)
-        test_nmes.append(test_nme) 
 
+            running_loss += loss.item()
+            running_nme += calculate_nme(outputs, targets)   # ← evaluate_modelを使わず高速化
+
+        # epoch 平均
+        avg_train_loss = running_loss / len(train_loader)
+        avg_train_nme = running_nme / len(train_loader)
+
+        # --- テストデータ評価（こちらは通常 evaluate_model を使う） ---
+        test_loss, test_nme = evaluate_model(model, test_loader, criterion, device)
+
+        # --- ログ保存 ---
         with open(TRAIN_LOG_FILE, 'a') as f:
             f.write(
-            f"{epoch+1},{avg_train_loss:.6f},{train_nme_epoch:.6f},"
-            f"{test_loss:.6f},{test_nme:.6f}\n"
-        )
-        print(f"--- Epoch [{epoch+1}/{NUM_EPOCHS}] 完了. Train Loss: {avg_train_loss:.4f}, Train NME: {train_nme_epoch:.4f}, Test Loss: {test_loss:.4f}, Test NME: {test_nme:.4f} ---")
+                f"{epoch+1},{avg_train_loss:.6f},{avg_train_nme:.6f},"
+                f"{test_loss:.6f},{test_nme:.6f}\n"
+            )
 
-    # 最終評価とモデルの保存 
-    final_test_loss , final_test_nme = evaluate_model(model, test_loader, criterion, device)
+        print(f"--- Epoch [{epoch+1}/{NUM_EPOCHS}] 完了 "
+              f"Train Loss: {avg_train_loss:.4f}, Train NME: {avg_train_nme:.4f}, "
+              f"Test Loss: {test_loss:.4f}, Test NME: {test_nme:.4f}")
+
+
+    # --- 最終評価 ---
+    final_test_loss, final_test_nme = evaluate_model(model, test_loader, criterion, device)
     print(f"\n Final Test Loss: {final_test_loss:.4f}, Final Test NME: {final_test_nme:.4f}")
 
-    MODEL_PATH_SAVE = 'landmark_regressor_final_2.pth' 
+    # --- モデル保存 ---
+    MODEL_PATH_SAVE = 'densenet_aug.pth'
     torch.save(model.state_dict(), MODEL_PATH_SAVE)
     print(f"モデルが '{MODEL_PATH_SAVE}' として保存されました。")
-    
-   
+
     return model, test_loader, device
+
 
 
 # スクリプト実行
