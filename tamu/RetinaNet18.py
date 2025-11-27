@@ -485,7 +485,7 @@ for epoch in range(num_epochs):
 #------------------------------------------------------------------------------------
 
 # モデルの重みを保存
-torch.save(model.state_dict(), 'retinanet_custom_weights_final.pth')
+torch.save(model.state_dict(), 'retinanet18_weights_SGD.pth')
 
 # 学習後にIoUを評価
 evaluate_retinanet(model, test_loader, device, iou_threshold=0.5)
