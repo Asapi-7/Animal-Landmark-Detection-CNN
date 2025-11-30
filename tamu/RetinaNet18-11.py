@@ -223,7 +223,7 @@ val_loader= DataLoader(
     val_dataset,
     batch_size=16,
     shuffle=False,
-    num_worlers=2,
+    num_workers=2,
     collate_fn=custom_collate_fn
 )
 
