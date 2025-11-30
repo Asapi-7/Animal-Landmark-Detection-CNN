@@ -277,7 +277,7 @@ class BackboneWithFPN(nn.Module):
         c3, c4, c5 = self.body(x)  # 自作ResNetが中間特徴を返すように設計
         return self.fpn([c3, c4, c5])
 
-fpn = FeaturePyramidNetwork(in_channels_list=[128, 256, 512], out_channels=256) #自作FPNを適用する
+fpn = FeaturePyramidNetwork(in_channels_list=[512, 1024, 2048], out_channels=256) #自作FPNを適用する
 
 backbone = BackboneWithFPN(custom_backbone, fpn,out_channels=256) # ResNet + FPN を統合
 
