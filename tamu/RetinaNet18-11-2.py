@@ -82,8 +82,94 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
             labels = np.empty((0,), dtype=np.int64)
 
         return boxes, labels
+    
+    def __getitem__(self, idx):
+    # ファイルパス生成
+        img_path_full = self.imgs[idx]
+        img_filename = os.path.basename(img_path_full)
+        base_name = os.path.splitext(img_filename)[0]
+        pts_filename = base_name + ".pts"
+        pts_path = os.path.join(self.root, pts_filename)
 
-        
+    # 読み込み
+        img = Image.open(img_path_full).convert("RGB")
+
+    # BBOX読み込み
+        boxes_np, labels_np = self._parse_pts(pts_path)
+
+    # -------------------------
+    # ★ BBox が存在しない場合
+    # -------------------------
+        if boxes_np.size == 0:
+        # augment 有無によって画像変換だけ適用
+            if self.augment:
+                if self.color_transform is not None:
+                    img = self.color_transform(img)
+                img = T.functional.to_tensor(img)
+            else:
+                img = self.transforms(img) if self.transforms else T.functional.to_tensor(img)
+
+            target = {
+                "boxes": torch.empty((0, 4), dtype=torch.float32),
+                "labels": torch.empty((0,), dtype=torch.int64),
+                "image_id": torch.tensor([idx]),
+            }
+            return img, target
+
+    # -------------------------
+    # ★ BBox がある場合
+    # -------------------------
+        x1, y1, x2, y2 = boxes_np[0]
+
+    # BBox の幅・高さが 1 未満 → 無効
+        if (x2 - x1) < 1 or (y2 - y1) < 1:
+            boxes_np = np.empty((0, 4), dtype=np.float32)
+            labels_np = np.empty((0,), dtype=np.int64)
+
+    # augment 処理
+        if self.augment and boxes_np.size > 0:
+
+            x1, y1, x2, y2 = boxes_np[0]
+
+        # 左右反転
+            if random.random() > 0.5:
+                img = T.functional.hflip(img)
+                width, height = img.size
+
+                x1_new = width - x2
+                x2_new = width - x1
+                x1, x2 = min(x1_new, x2_new), max(x1_new, x2_new)
+
+            boxes_np = np.array([[x1, y1, x2, y2]], dtype=np.float32)
+
+        # 色変換
+            if self.color_transform is not None:
+                img = self.color_transform(img)
+
+            img = T.functional.to_tensor(img)
+
+        else:
+        # augment 無し
+            img = self.transforms(img) if self.transforms else T.functional.to_tensor(img)
+
+    # ターゲット作成
+        if boxes_np.size == 0:
+            boxes = torch.empty((0, 4), dtype=torch.float32)
+            labels = torch.empty((0,), dtype=torch.int64)
+        else:
+            boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
+            labels = torch.as_tensor(labels_np, dtype=torch.int64)
+
+        target = {
+            "boxes": boxes,
+            "labels": labels,
+            "image_id": torch.tensor([idx]),
+        }
+
+        return img, target
+
+
+    """    
     def __getitem__(self, idx): # 指定されたインデックス(番号)の画像とｱﾉﾃｰｼｮﾝを返す
         # ファイルパスの構築
         img_path_full = self.imgs[idx] # 画像ファイルのパスを取得
@@ -153,6 +239,7 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         } # ターゲット辞書の構築
 
         return img, target
+    """
     
     # データセットのサイズを返す
     def __len__(self):
