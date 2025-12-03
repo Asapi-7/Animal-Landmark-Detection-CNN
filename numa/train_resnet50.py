@@ -256,12 +256,10 @@ class ResNet50(nn.Module):
 class LandmarkRegressor(nn.Module):
     def __init__(self, num_landmarks=9):
         super(LandmarkRegressor, self).__init__()
-        self.backbone = ResNet50(weights=None)  # 学習から始める場合
-        num_features = self.backbone.fc.in_features
-        self.backbone.fc = nn.Linear(num_features, num_landmarks * 2)
-
+        self.backbone = ResNet50(num_classes=num_landmarks*2)
+     
     def forward(self, x):
-        return self.backbone(x)
+
 
 #評価関数
 def evaluate_model(model, data_loader, criterion, device):
