@@ -258,7 +258,7 @@ class LandmarkRegressor(nn.Module):
     def __init__(self, num_landmarks=9):
         super(LandmarkRegressor, self).__init__()
         
-        self.backbone = ResNet18(num_classes=1000)
+        self.backbone = ResNet18(weights=None)
         num_features = self.backbone.linear.in_features       
         self.backbone.linear = nn.Linear(num_features, num_landmarks * 2)
 
@@ -508,7 +508,7 @@ def train_model():
         verbose=True  # LR変更を表示
     )
 
-    LOG_FILE = "train3_val_log.txt"
+    LOG_FILE = "log_train_sceduler.txt"
     if os.path.exists(LOG_FILE):
         os.remove(LOG_FILE)
 
