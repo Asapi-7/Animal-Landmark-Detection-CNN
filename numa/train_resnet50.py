@@ -10,6 +10,7 @@ from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt 
 from tqdm import tqdm
 import numpy as np 
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
 
@@ -259,6 +260,7 @@ class LandmarkRegressor(nn.Module):
         self.backbone = ResNet50(num_classes=num_landmarks*2)
      
     def forward(self, x):
+        return self.backbone(x)  
 
 
 #評価関数
