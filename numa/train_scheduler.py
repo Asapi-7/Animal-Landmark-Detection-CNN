@@ -499,7 +499,7 @@ def train_model():
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    # ★ 学習率スケジューラを追加
+    # 学習率スケジューラ
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode='min',
