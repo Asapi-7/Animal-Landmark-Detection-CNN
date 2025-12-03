@@ -229,7 +229,7 @@ val_loader= DataLoader(
 
 #-----------------------------------------------------------------------------------------
 # バックボーンとアンカー生成器の構築
-custom_backbone = resnet18(pretrained=True) # ResNet18を使えるようにする (重みなし)
+custom_backbone = resnet18(pretrained=True,return_features=True) # ResNet18を使えるようにする (重みなし)
 
 # FPNを構築するための設定
 out_channels = 256 # FPNの各出力マップのチャンネル数
