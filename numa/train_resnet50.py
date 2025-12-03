@@ -259,6 +259,7 @@ class LandmarkRegressor(nn.Module):
         self.backbone = ResNet50(num_classes=num_landmarks*2)
      
     def forward(self, x):
+        return self.backbone(x)  
 
 
 #評価関数
