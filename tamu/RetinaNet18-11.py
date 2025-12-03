@@ -390,7 +390,7 @@ def evaluate_retinanet(model, dataloader, device, iou_threshold=0.5):
 
 # ------------------------------------------------------------------------------
 # 学習するエポック数
-num_epochs = 20 
+num_epochs = 17
 
 # 学習
 for epoch in range(num_epochs):
