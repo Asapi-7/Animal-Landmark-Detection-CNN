@@ -45,7 +45,7 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.1),
             A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.02, p=0.5),
-            A.ShiftScaleRotate(shift_limit=0.02, scale_limit=0.05, rotate_limit=5, border_mode=0, p=0.4),
+            A.Affine(shift_limit=0.02, scale_limit=0.05, rotate_limit=5, border_mode=0, p=0.4),
             ToTensorV2()
         ], 
         bbox_params=A.BboxParams(
