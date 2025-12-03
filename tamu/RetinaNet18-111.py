@@ -28,6 +28,8 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split # データ分割用
 from PIL import Image # 画像ファイルの読み込みとRBG変換
 import random # データ拡張
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 #----------------------------------------------------------------------------------
 # データセットを整えるクラス
@@ -39,6 +41,18 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         self.imgs = img_list # 画像パスのリストを保持する
         self.augment = augment # データ拡張用
         self.color_transform = T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.02 ) # 色変換用
+        self.augment_transform = A.Compose([ # データ拡張
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.1),
+            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.02, p=0.5),
+            A.ShiftScaleRotate(shift_limit=0.02, scale_limit=0.05, rotate_limit=5, border_mode=0, p=0.4),
+            ToTensorV2()
+        ], 
+        bbox_params=A.BboxParams(
+            format='pascal_voc',
+            label_fields=['labels'],
+            min_visibility=0.5,
+        ))
 
     # バウンディングボックスの情報を抽出する    
     def _parse_pts(self, pts_path):
@@ -101,12 +115,47 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
 
         if boxes_np.size > 0:
             x1, y1, x2, y2 = boxes_np[0]
-        if x2 - x1 < 1 or y2 - y1 < 1:  # width or height が 1 ピクセル未満
-            boxes_np = np.empty((0, 4), dtype=np.float32)
-            labels_np = np.empty((0,), dtype=np.int64)
+            if x2 - x1 < 1 or y2 - y1 < 1:
+                boxes_np = np.empty((0, 4), dtype=np.float32)
+                labels_np = np.empty((0,), dtype=np.int64)
 
+        # --- Albumentations augment ---
+        if self.augment and boxes_np.size > 0:
+            augmented = self.augment_transform(
+                image=np.array(img),
+                bboxes=boxes_np.tolist(),
+                labels=labels_np.tolist()
+            )
+            img = augmented['image']
+            boxes_np = np.array(augmented['bboxes'], dtype=np.float32)
+            labels_np = np.array(augmented['labels'], dtype=np.int64)
+
+        else:
+            img = T.functional.to_tensor(img)
+
+        if boxes_np.size == 0:
+            boxes = torch.empty((0,4), dtype=torch.float32)
+            labels = torch.empty((0,), dtype=torch.int64)
+        else:
+            boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
+            labels = torch.as_tensor(labels_np, dtype=torch.int64)
+
+        target = {
+            "boxes": boxes,
+            "labels": labels,
+            "image_id": torch.tensor([idx]),
+        }
+
+        return img, target
+
+    def __len__(self):
+        return len(self.imgs)
+
+
+    """
         # データ拡張
         if self.augment and boxes_np.size > 0:
+
 
             x1, y1, x2, y2 = boxes_np[0]
             
@@ -138,6 +187,7 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
             else:
                 img = T.functional.to_tensor(img)
 
+
         # ターゲット辞書の作成
         if boxes_np.size == 0: # バウンディングボックスが空なら空のテンソルを作成
             boxes = torch.empty((0, 4), dtype=torch.float32)
@@ -157,6 +207,8 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
     # データセットのサイズを返す
     def __len__(self):
         return len(self.imgs)
+
+    """
 
 # 前処理(Transforms)の定義
 def get_transform(train):
@@ -183,16 +235,22 @@ print(f"全画像数: {len(all_imgs)}")
 # 8:1:1にする
 #=======================================================================================================
 # 学習用 (80%) とテスト用 (20%) に分割
-train_imgs, test_imgs = train_test_split( 
+train_imgs, temp_imgs = train_test_split( 
     all_imgs, 
     test_size=0.2, 
     random_state=42 # シード固定で再現性を確保(同じようにデータセットを分けれるようにする)
 )
-print(f"学習用サンプル数 (80%): {len(train_imgs)}, テスト用サンプル数 (20%): {len(test_imgs)}")
+val_imgs, test_imgs = train_test_split(
+    temp_imgs,
+    test_size=0.5,      # 20% の半分 → 10%
+    random_state=42
+)
+print(f"学習用サンプル数 (80%): {len(train_imgs)}, テスト用サンプル数 (10%): {len(test_imgs)}, 検証用サンプル数 (10%): {len(val_imgs)}")
 
 # Datasetのインスタンス作成　それぞれのデータセットを作成
 train_dataset = CustomObjectDetectionDataset(train_imgs, DATA_ROOT, get_transform(train=True), augment=True) # 拡張可能
 test_dataset = CustomObjectDetectionDataset(test_imgs, DATA_ROOT, get_transform(train=False), augment=False)
+val_dataset = CustomObjectDetectionDataset(val_imgs, DATA_ROOT, get_transform(train=False), augment=False)
 
 # DataLoaderの作成
 train_loader = DataLoader(
@@ -210,6 +268,15 @@ test_loader = DataLoader(
     shuffle=False, # シャッフルなし
     num_workers=2, 
     collate_fn=custom_collate_fn 
+)
+
+# ValLoaderの作成
+val_loader= DataLoader(
+    val_dataset,
+    batch_size=16,
+    shuffle=False,
+    num_workers=2,
+    collate_fn=custom_collate_fn
 )
 
 #-----------------------------------------------------------------------------------------
@@ -310,10 +377,10 @@ optimizer = optim.SGD(
 )
 
 # 学習率を下げる
-scheduler = MultiStepLR(
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer,
-    milestones=[10, 15],   # 10 epoch で lr を下げ、15 epoch でさらに下げる
-    gamma=0.1              # 1/10 に減衰
+    T_max=20,
+    eta_min=1e-6
 )
 
 #---------------------------------------------------------------------------
@@ -375,7 +442,7 @@ def evaluate_retinanet(model, dataloader, device, iou_threshold=0.5):
 
 # ------------------------------------------------------------------------------
 # 学習するエポック数
-num_epochs = 30 
+num_epochs = 20 
 
 # 学習
 for epoch in range(num_epochs):
@@ -409,14 +476,12 @@ for epoch in range(num_epochs):
     tqdm.write(f"--- Epoch [{epoch}/{num_epochs}] 完了。 平均損失: {total_epoch_loss / len(train_loader):.4f}s ---")
     avg_train_loss = total_epoch_loss / len(train_loader)
 
-    scheduler.step()
-
     ### --- テストロス計算ループ ---###
     model.train()   
-    test_loss = 0.0
+    val_loss = 0.0
 
     with torch.no_grad():
-        for images, targets in tqdm(test_loader, desc=f"Testing {epoch+1}/{num_epochs}"):
+        for images, targets in tqdm(val_loader, desc=f"Valdiation {epoch+1}/{num_epochs}"):
             images = [img.to(device).float() for img in images]
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -425,15 +490,17 @@ for epoch in range(num_epochs):
 
             losses = sum(loss for loss in loss_dict.values())
 
-            test_loss += losses.item()
+            val_loss += losses.item()
 
-    avg_test_loss = test_loss / len(test_loader)
-    print(f"Epoch {epoch+1} Test Loss: {avg_test_loss:.4f}")
+    avg_val_loss = val_loss / len(val_loader)
+    print(f"Epoch {epoch+1} Valdiaion Loss: {avg_val_loss:.4f}")
+
+    scheduler.step()
 
 #------------------------------------------------------------------------------------
 
 # モデルの重みを保存
-torch.save(model.state_dict(), 'retinanet_custom_weights_final.pth')
+torch.save(model.state_dict(), 'retinanet18111_weights_SGD.pth')
 
 # 学習後にIoUを評価
 evaluate_retinanet(model, test_loader, device, iou_threshold=0.5)

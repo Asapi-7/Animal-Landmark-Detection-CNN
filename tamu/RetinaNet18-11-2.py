@@ -16,7 +16,7 @@ from torchvision import transforms
 from torch.optim.lr_scheduler import MultiStepLR
 
 # モデル構築用
-from resnet50_backbone import resnet50 # ResNet50のバックボーン
+from resnet18_backbone import resnet18 # ResNet18のバックボーン
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor # ResNetからFPNを構築
 from torchvision.ops.feature_pyramid_network import LastLevelP6P7 # FPNの最終レベル(P6,P7)を追加する
 from torchvision.models.detection.anchor_utils import AnchorGenerator # RetinaNetのアンカー生成器
@@ -82,8 +82,94 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
             labels = np.empty((0,), dtype=np.int64)
 
         return boxes, labels
+    
+    def __getitem__(self, idx):
+    # ファイルパス生成
+        img_path_full = self.imgs[idx]
+        img_filename = os.path.basename(img_path_full)
+        base_name = os.path.splitext(img_filename)[0]
+        pts_filename = base_name + ".pts"
+        pts_path = os.path.join(self.root, pts_filename)
 
-        
+    # 読み込み
+        img = Image.open(img_path_full).convert("RGB")
+
+    # BBOX読み込み
+        boxes_np, labels_np = self._parse_pts(pts_path)
+
+    # -------------------------
+    # ★ BBox が存在しない場合
+    # -------------------------
+        if boxes_np.size == 0:
+        # augment 有無によって画像変換だけ適用
+            if self.augment:
+                if self.color_transform is not None:
+                    img = self.color_transform(img)
+                img = T.functional.to_tensor(img)
+            else:
+                img = self.transforms(img) if self.transforms else T.functional.to_tensor(img)
+
+            target = {
+                "boxes": torch.empty((0, 4), dtype=torch.float32),
+                "labels": torch.empty((0,), dtype=torch.int64),
+                "image_id": torch.tensor([idx]),
+            }
+            return img, target
+
+    # -------------------------
+    # ★ BBox がある場合
+    # -------------------------
+        x1, y1, x2, y2 = boxes_np[0]
+
+    # BBox の幅・高さが 1 未満 → 無効
+        if (x2 - x1) < 1 or (y2 - y1) < 1:
+            boxes_np = np.empty((0, 4), dtype=np.float32)
+            labels_np = np.empty((0,), dtype=np.int64)
+
+    # augment 処理
+        if self.augment and boxes_np.size > 0:
+
+            x1, y1, x2, y2 = boxes_np[0]
+
+        # 左右反転
+            if random.random() > 0.5:
+                img = T.functional.hflip(img)
+                width, height = img.size
+
+                x1_new = width - x2
+                x2_new = width - x1
+                x1, x2 = min(x1_new, x2_new), max(x1_new, x2_new)
+
+            boxes_np = np.array([[x1, y1, x2, y2]], dtype=np.float32)
+
+        # 色変換
+            if self.color_transform is not None:
+                img = self.color_transform(img)
+
+            img = T.functional.to_tensor(img)
+
+        else:
+        # augment 無し
+            img = self.transforms(img) if self.transforms else T.functional.to_tensor(img)
+
+    # ターゲット作成
+        if boxes_np.size == 0:
+            boxes = torch.empty((0, 4), dtype=torch.float32)
+            labels = torch.empty((0,), dtype=torch.int64)
+        else:
+            boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
+            labels = torch.as_tensor(labels_np, dtype=torch.int64)
+
+        target = {
+            "boxes": boxes,
+            "labels": labels,
+            "image_id": torch.tensor([idx]),
+        }
+
+        return img, target
+
+
+    """    
     def __getitem__(self, idx): # 指定されたインデックス(番号)の画像とｱﾉﾃｰｼｮﾝを返す
         # ファイルパスの構築
         img_path_full = self.imgs[idx] # 画像ファイルのパスを取得
@@ -153,6 +239,7 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         } # ターゲット辞書の構築
 
         return img, target
+    """
     
     # データセットのサイズを返す
     def __len__(self):
@@ -173,7 +260,7 @@ def custom_collate_fn(batch): # batch：(img,target)
     return images, targets
 
 # データの読み込みと分割
-DATA_ROOT = '/workspace/dataset' # データのルートディレクトリを指定
+DATA_ROOT = '/workspace/dataset_2' # データのルートディレクトリを指定
 
 # 全ての画像ファイルパスを取得
 all_imgs = sorted(glob.glob(os.path.join(DATA_ROOT, "*.jpg"))) # shorted()でファイル名順に並び替えられる
@@ -229,7 +316,7 @@ val_loader= DataLoader(
 
 #-----------------------------------------------------------------------------------------
 # バックボーンとアンカー生成器の構築
-custom_backbone = resnet50(pretrained=False) # ResNet50を使えるようにする (重みなし)
+custom_backbone = resnet18(pretrained=False) # ResNet18を使えるようにする (重みなし)
 
 # FPNを構築するための設定
 out_channels = 256 # FPNの各出力マップのチャンネル数
@@ -277,7 +364,7 @@ class BackboneWithFPN(nn.Module):
         c3, c4, c5 = self.body(x)  # 自作ResNetが中間特徴を返すように設計
         return self.fpn([c3, c4, c5])
 
-fpn = FeaturePyramidNetwork(in_channels_list=[512, 1024, 2048], out_channels=256) #自作FPNを適用する
+fpn = FeaturePyramidNetwork(in_channels_list=[128, 256, 512], out_channels=256) #自作FPNを適用する
 
 backbone = BackboneWithFPN(custom_backbone, fpn,out_channels=256) # ResNet + FPN を統合
 
@@ -429,7 +516,7 @@ for epoch in range(num_epochs):
     val_loss = 0.0
 
     with torch.no_grad():
-        for images, targets in tqdm(val_loader, desc=f"Validation {epoch+1}/{num_epochs}"):
+        for images, targets in tqdm(val_loader, desc=f"Valdiation {epoch+1}/{num_epochs}"):
             images = [img.to(device).float() for img in images]
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -441,14 +528,14 @@ for epoch in range(num_epochs):
             val_loss += losses.item()
 
     avg_val_loss = val_loss / len(val_loader)
-    print(f"Epoch {epoch+1} Validation Loss: {avg_val_loss:.4f}")
+    print(f"Epoch {epoch+1} Valdiation Loss: {avg_val_loss:.4f}")
 
     scheduler.step()
 
 #------------------------------------------------------------------------------------
 
 # モデルの重みを保存
-torch.save(model.state_dict(), 'retinanet181111_weights_SGD.pth')
+torch.save(model.state_dict(), 'retinanet1811_weights_SGD.pth')
 
 # 学習後にIoUを評価
 evaluate_retinanet(model, test_loader, device, iou_threshold=0.5)

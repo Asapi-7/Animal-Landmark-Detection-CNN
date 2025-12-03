@@ -16,7 +16,7 @@ from torchvision import transforms
 from torch.optim.lr_scheduler import MultiStepLR
 
 # モデル構築用
-from resnet50_backbone import resnet50 # ResNet50のバックボーン
+from resnet18_backbone import resnet18 # ResNet18のバックボーン
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor # ResNetからFPNを構築
 from torchvision.ops.feature_pyramid_network import LastLevelP6P7 # FPNの最終レベル(P6,P7)を追加する
 from torchvision.models.detection.anchor_utils import AnchorGenerator # RetinaNetのアンカー生成器
@@ -28,6 +28,8 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split # データ分割用
 from PIL import Image # 画像ファイルの読み込みとRBG変換
 import random # データ拡張
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 #----------------------------------------------------------------------------------
 # データセットを整えるクラス
@@ -39,6 +41,18 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         self.imgs = img_list # 画像パスのリストを保持する
         self.augment = augment # データ拡張用
         self.color_transform = T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.02 ) # 色変換用
+        self.augment_transform = A.Compose([ # データ拡張
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.1),
+            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.02, p=0.5),
+            A.ShiftScaleRotate(shift_limit=0.02, scale_limit=0.05, rotate_limit=5, border_mode=0, p=0.4),
+            ToTensorV2()
+        ], 
+        bbox_params=A.BboxParams(
+            format='pascal_voc',
+            label_fields=['labels'],
+            min_visibility=0.5,
+        ))
 
     # バウンディングボックスの情報を抽出する    
     def _parse_pts(self, pts_path):
@@ -101,12 +115,47 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
 
         if boxes_np.size > 0:
             x1, y1, x2, y2 = boxes_np[0]
-        if x2 - x1 < 1 or y2 - y1 < 1:  # width or height が 1 ピクセル未満
-            boxes_np = np.empty((0, 4), dtype=np.float32)
-            labels_np = np.empty((0,), dtype=np.int64)
+            if x2 - x1 < 1 or y2 - y1 < 1:
+                boxes_np = np.empty((0, 4), dtype=np.float32)
+                labels_np = np.empty((0,), dtype=np.int64)
 
+        # --- Albumentations augment ---
+        if self.augment and boxes_np.size > 0:
+            augmented = self.augment_transform(
+                image=np.array(img),
+                bboxes=boxes_np.tolist(),
+                labels=labels_np.tolist()
+            )
+            img = augmented['image']
+            boxes_np = np.array(augmented['bboxes'], dtype=np.float32)
+            labels_np = np.array(augmented['labels'], dtype=np.int64)
+
+        else:
+            img = T.functional.to_tensor(img)
+
+        if boxes_np.size == 0:
+            boxes = torch.empty((0,4), dtype=torch.float32)
+            labels = torch.empty((0,), dtype=torch.int64)
+        else:
+            boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
+            labels = torch.as_tensor(labels_np, dtype=torch.int64)
+
+        target = {
+            "boxes": boxes,
+            "labels": labels,
+            "image_id": torch.tensor([idx]),
+        }
+
+        return img, target
+
+    def __len__(self):
+        return len(self.imgs)
+
+
+    """
         # データ拡張
         if self.augment and boxes_np.size > 0:
+
 
             x1, y1, x2, y2 = boxes_np[0]
             
@@ -138,6 +187,7 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
             else:
                 img = T.functional.to_tensor(img)
 
+
         # ターゲット辞書の作成
         if boxes_np.size == 0: # バウンディングボックスが空なら空のテンソルを作成
             boxes = torch.empty((0, 4), dtype=torch.float32)
@@ -158,6 +208,8 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
     def __len__(self):
         return len(self.imgs)
 
+    """
+
 # 前処理(Transforms)の定義
 def get_transform(train):
     t = [T.ToTensor()] # PIL画像をテンソル形式に変換
@@ -173,7 +225,7 @@ def custom_collate_fn(batch): # batch：(img,target)
     return images, targets
 
 # データの読み込みと分割
-DATA_ROOT = '/workspace/dataset' # データのルートディレクトリを指定
+DATA_ROOT = '/workspace/dataset_2' # データのルートディレクトリを指定
 
 # 全ての画像ファイルパスを取得
 all_imgs = sorted(glob.glob(os.path.join(DATA_ROOT, "*.jpg"))) # shorted()でファイル名順に並び替えられる
@@ -229,7 +281,7 @@ val_loader= DataLoader(
 
 #-----------------------------------------------------------------------------------------
 # バックボーンとアンカー生成器の構築
-custom_backbone = resnet50(pretrained=False) # ResNet50を使えるようにする (重みなし)
+custom_backbone = resnet18(pretrained=False) # ResNet18を使えるようにする (重みなし)
 
 # FPNを構築するための設定
 out_channels = 256 # FPNの各出力マップのチャンネル数
@@ -277,7 +329,7 @@ class BackboneWithFPN(nn.Module):
         c3, c4, c5 = self.body(x)  # 自作ResNetが中間特徴を返すように設計
         return self.fpn([c3, c4, c5])
 
-fpn = FeaturePyramidNetwork(in_channels_list=[512, 1024, 2048], out_channels=256) #自作FPNを適用する
+fpn = FeaturePyramidNetwork(in_channels_list=[128, 256, 512], out_channels=256) #自作FPNを適用する
 
 backbone = BackboneWithFPN(custom_backbone, fpn,out_channels=256) # ResNet + FPN を統合
 
@@ -429,7 +481,7 @@ for epoch in range(num_epochs):
     val_loss = 0.0
 
     with torch.no_grad():
-        for images, targets in tqdm(val_loader, desc=f"Validation {epoch+1}/{num_epochs}"):
+        for images, targets in tqdm(val_loader, desc=f"Valdiation {epoch+1}/{num_epochs}"):
             images = [img.to(device).float() for img in images]
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -441,14 +493,14 @@ for epoch in range(num_epochs):
             val_loss += losses.item()
 
     avg_val_loss = val_loss / len(val_loader)
-    print(f"Epoch {epoch+1} Validation Loss: {avg_val_loss:.4f}")
+    print(f"Epoch {epoch+1} Valdiaion Loss: {avg_val_loss:.4f}")
 
     scheduler.step()
 
 #------------------------------------------------------------------------------------
 
 # モデルの重みを保存
-torch.save(model.state_dict(), 'retinanet181111_weights_SGD.pth')
+torch.save(model.state_dict(), 'retinanet18111_weights_SGD.pth')
 
 # 学習後にIoUを評価
 evaluate_retinanet(model, test_loader, device, iou_threshold=0.5)
