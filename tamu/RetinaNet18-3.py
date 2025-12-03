@@ -16,7 +16,7 @@ import torchvision.transforms.v2 as T_v2 # 一貫性を持たせられる
 from torchvision.tv_tensors import BoundingBoxes, Mask, Image as TVImage # 二つのデータを同期させられる
 
 # モデル構築用
-from resnet18_backbone import resnet18 # ResNet18のバックボーン
+from resnet18_backbone_pre import resnet18 # ResNet18のバックボーン
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor # ResNetからFPNを構築
 from torchvision.ops.feature_pyramid_network import LastLevelP6P7 # FPNの最終レベル(P6,P7)を追加する
 from torchvision.models.detection.anchor_utils import AnchorGenerator # RetinaNetのアンカー生成器
@@ -410,7 +410,7 @@ for epoch in range(num_epochs):
     tqdm.write(f"--- Epoch [{epoch}/{num_epochs}] 完了。 平均損失: {total_epoch_loss / len(train_loader):.4f}s ---")
 
 # モデルの重みを保存
-torch.save(model.state_dict(), 'retinanet_custom_weights_final.pth')
+torch.save(model.state_dict(), 'retinanet183_weights_SGD.pth')
 
 # 学習後にIoUを評価
 evaluate_retinanet(model, test_loader, device, iou_threshold=0.5)
