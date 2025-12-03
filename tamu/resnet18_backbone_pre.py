@@ -116,7 +116,7 @@ class ResNet(nn.Module):
             c3 = self.layer2(c2)
             c4 = self.layer3(c3)
             c5 = self.layer4(c4)
-            return [c2, c3, c4, c5]
+            return [c3, c4, c5]
 
         # Normal classifier forward
         x = self.conv1(x)
