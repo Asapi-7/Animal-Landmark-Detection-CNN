@@ -1,0 +1,551 @@
+import os
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+from torchvision.transforms import functional as F 
+from PIL import Image, ImageDraw, ImageFont 
+import glob
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt 
+from tqdm import tqdm
+import numpy as np 
+
+
+
+IMG_SIZE = 224
+NUM_LANDMARKS = 9
+
+
+# ランドマーク座標 (.pts) の読み込み関数
+def load_landmarks_from_pts_to_tensor(pts_path):
+    points = []
+    with open(pts_path, 'r') as f:
+        lines = f.readlines()
+
+    start_index = -1
+    for i, line in enumerate(lines):
+        if line.strip() == '{':
+            start_index = i + 1
+            break
+            
+    # 9点分を抽出
+    for line in lines[start_index : start_index + 9]:
+        try:
+            x, y = map(float, line.strip().split())
+            points.extend([x, y]) 
+        except ValueError:
+            continue
+
+    if len(points) != 18:
+          raise ValueError(f"Expected 18 coordinates (9 points), but found {len(points)} in {pts_path}")
+
+    return torch.tensor(points, dtype=torch.float32)
+
+
+#データ拡張
+# 回転
+class RandomRotation:
+    def __init__(self, degrees, W=IMG_SIZE):
+        self.W = W
+        self.degrees = degrees
+        self.center = (W / 2, W / 2)
+
+    def get_params(self):
+        angle = float(torch.empty(1).uniform_(float(self.degrees[0]), float(self.degrees[1])).item())
+        return angle
+
+    def __call__(self, img, landmarks):
+        angle = self.get_params()
+
+        # 画像を回転
+        img_transformed = transforms.functional.affine(img, angle=angle, translate=(0,0), scale=1.0, shear=0.0, interpolation=Image.BICUBIC, fill=0)
+
+        # ランドマークも回転
+        pts = landmarks.reshape(-1, 2).double()
+        center_tensor = torch.tensor(self.center, dtype=torch.float64)
+        pts = pts - center_tensor
+
+        angle_rad = np.deg2rad(angle)
+        R = torch.tensor([
+            [np.cos(angle_rad), -np.sin(angle_rad)],
+            [np.sin(angle_rad),  np.cos(angle_rad)]
+        ], dtype=torch.float64)
+
+        pts = pts @ R.T
+        pts = pts + center_tensor
+
+        return img_transformed, pts.flatten().float()
+
+
+
+class RandomHorizontalFlip:
+    #水平反転とランドマーク座標変換
+    def __init__(self, p=0.5, W=IMG_SIZE):
+        self.p = p #水平反転を行う確率
+        self.W = W #画像の幅
+        # ランドマーク順序交換
+        self.point_swap_map = {0: 3, 3: 0, 1: 2, 2: 1, 5: 6, 6: 5}
+
+    def __call__(self, img, landmarks):
+        if torch.rand(1) < self.p:
+            # 水平反転
+            img = transforms.functional.hflip(img)
+            
+            # ランドマーク座標を反転
+            flipped = landmarks.clone()
+            flipped[::2] = (self.W - 1) - flipped[::2]
+
+            coords = flipped.reshape(-1, 2).clone()
+            
+            # ランドマーク順序交換
+            new_coords = coords.clone()
+            for src, dst in self.point_swap_map.items():
+                new_coords[dst] = coords[src]
+            
+            return img, new_coords.flatten().float()
+        
+        return img, landmarks.clone().float()
+
+
+class LandmarkDataset(Dataset):
+    def __init__(self, file_paths, is_train=False):
+        self.image_files = file_paths
+        self.is_train = is_train
+        self.W = IMG_SIZE
+
+        # 最終変換（Tensor化・正規化）
+        self.transform_tensor = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225])
+        ])
+
+        if is_train:
+            # 回転のみ
+            self.affine_transform = RandomRotation(degrees=(-10, 10), W=self.W)
+            # 水平反転
+            self.hflip_transform = RandomHorizontalFlip(p=0.5, W=self.W)
+
+        else:
+            self.affine_transform = None
+            self.hflip_transform = None
+
+    def __len__(self):
+        return len(self.image_files)
+
+    def __getitem__(self, idx):
+        img_path = self.image_files[idx]
+        pts_path = img_path.replace(".jpg", ".pts")
+
+        # 画像とランドマーク読み込み
+        image = Image.open(img_path).convert("RGB")
+        landmarks = load_landmarks_from_pts_to_tensor(pts_path)
+
+        if self.is_train:
+            # 1. 回転 (Affine)
+            image, landmarks = self.affine_transform(image, landmarks)
+            # 2. 水平反転 (point_swap_mapで順序交換)
+            image, landmarks = self.hflip_transform(image, landmarks)
+
+        # Tensor化・正規化
+        image = self.transform_tensor(image)
+
+        return image, landmarks, img_path
+
+
+
+class Bottleneck(nn.Module):
+    expansion = 4
+
+    def __init__(self, in_channels, out_channels, stride=1):
+        super().__init__()
+
+        mid_channels = out_channels
+
+        self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(mid_channels)
+
+        self.conv2 = nn.Conv2d(mid_channels, mid_channels, kernel_size=3,
+                               stride=stride, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(mid_channels)
+
+        self.conv3 = nn.Conv2d(mid_channels, out_channels * self.expansion,
+                               kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(out_channels * self.expansion)
+
+        self.relu = nn.ReLU(inplace=True)
+
+        self.downsample = None
+        if stride != 1 or in_channels != out_channels * self.expansion:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels * self.expansion,
+                          kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels * self.expansion)
+            )
+
+    def forward(self, x):
+        identity = x
+
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.relu(self.bn2(self.conv2(out)))
+        out = self.bn3(self.conv3(out))
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        out += identity
+        out = self.relu(out)
+        return out
+
+
+# -------------------------
+# ResNet50
+# -------------------------
+class ResNet50(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+
+        self.in_channels = 64
+
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2,
+                               padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+
+        self.max_pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+
+        # Bottleneck構造の層数は [3, 4, 6, 3]
+        self.layer1 = self._make_layer(64, 3)
+        self.layer2 = self._make_layer(128, 4, stride=2)
+        self.layer3 = self._make_layer(256, 6, stride=2)
+        self.layer4 = self._make_layer(512, 3, stride=2)
+
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Linear(512 * Bottleneck.expansion, num_classes)
+
+    def _make_layer(self, out_channels, blocks, stride=1):
+        layers = []
+        layers.append(Bottleneck(self.in_channels, out_channels, stride))
+        self.in_channels = out_channels * Bottleneck.expansion
+
+        for _ in range(1, blocks):
+            layers.append(Bottleneck(self.in_channels, out_channels))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x, return_embed=False):
+        x = self.relu(self.bn1(self.conv1(x)))
+        x = self.max_pool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avg_pool(x)
+        x = x.flatten(1)
+
+        if return_embed:
+            return x
+
+        x = self.fc(x)
+        return x
+
+
+class LandmarkRegressor(nn.Module):
+    def __init__(self, num_landmarks=9):
+        super(LandmarkRegressor, self).__init__()
+        self.backbone = ResNet50(weights=None)  # 学習から始める場合
+        num_features = self.backbone.fc.in_features
+        self.backbone.fc = nn.Linear(num_features, num_landmarks * 2)
+
+    def forward(self, x):
+        return self.backbone(x)
+
+#評価関数
+def evaluate_model(model, data_loader, criterion, device):
+    model.eval()
+    total_loss = 0
+    total_nme = 0
+    count = 0
+
+    with torch.no_grad():
+        for data in data_loader:
+             imgs, labels = data[0].to(device), data[1].to(device)
+             outputs = model(imgs)
+
+             loss = criterion(outputs, labels)
+             total_loss += loss.item() * imgs.size(0)
+
+             nme_batch = calculate_nme(outputs, labels, device)
+             total_nme += nme_batch.item() * imgs.size(0)
+
+
+             count += imgs.size(0)
+
+    avg_loss = total_loss / count
+    avg_nme = total_nme / count
+    return avg_loss, avg_nme
+
+#NME
+def calculate_normalization_factor(landmarks): 
+    #ランドマーク [N, 18] から、バウンディングボックスの対角線長を計算する。
+    
+    # 座標を (N, 9, 2) に整形: (x1, y1, x2, y2, ...) -> ((x1, y1), (x2, y2), ...)
+    coords = landmarks.reshape(-1, 9, 2)
+    
+    # バウンディングボックスの計算 (全点の min/max を使用)
+    x_min = coords[..., 0].min(dim=1).values
+    x_max = coords[..., 0].max(dim=1).values
+    y_min = coords[..., 1].min(dim=1).values
+    y_max = coords[..., 1].max(dim=1).values
+    
+    # 対角線長の計算: sqrt((x_max - x_min)^2 + (y_max - y_min)^2)
+    width = x_max - x_min
+    height = y_max - y_min
+    
+    # 対角線長 (NMEの正規化基準)
+    diagonal = torch.sqrt(width**2 + height**2)
+    
+    # 対角線長がゼロになるのを防ぐため、小さな値を加える
+    return diagonal + 1e-6
+
+
+def calculate_nme(outputs, labels, device):
+    # NME (Normalized Mean Error) を計算する 
+    num_landmarks = 9
+    
+    # 出力と正解を (N, 9, 2) に整形
+    outputs_reshaped = outputs.reshape(-1, num_landmarks, 2)
+    labels_reshaped = labels.reshape(-1, num_landmarks, 2)
+
+    # 1. 予測座標と正解座標間のユークリッド距離を計算 (各ランドマークごと)
+    distances = torch.linalg.norm(outputs_reshaped - labels_reshaped, dim=2) # [N, 9]
+
+    # 2. 正規化ファクター（バウンディングボックスの対角線長）を計算
+    normalization_factors = calculate_normalization_factor(labels).to(device) # [N]
+
+    # 3. 各ランドマークの距離を正規化ファクターで割る
+    # unsqueeze(1) で [N] -> [N, 1] にしてブロードキャストを可能にする
+    normalized_distances = distances / normalization_factors.unsqueeze(1) # [N, 9]
+
+    # 4. 全ての正規化距離の平均を取る 
+    nme = normalized_distances.mean()
+
+    return nme
+
+
+#ランドマーク描画
+def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
+    draw = ImageDraw.Draw(image)
+    
+    try:
+        font_size = 18
+        font = ImageFont.truetype("arial.ttf", size=font_size)
+    except IOError:
+        font = ImageFont.load_default() 
+    
+    if isinstance(landmarks, torch.Tensor):
+        landmarks = landmarks.cpu().numpy()
+        
+    for k in range(0, len(landmarks) // 2):
+        i = k * 2
+        x = int(landmarks[i])
+        y = int(landmarks[i+1])
+        
+        landmark_index = k + 1 
+        
+        bbox = [x - point_size, y - point_size, x + point_size, y + point_size]
+        draw.ellipse(bbox, fill=color)
+        
+        text_position = (x + point_size + 2, y + point_size + 2) 
+        draw.text(text_position, str(landmark_index), fill="black", font=font, stroke_width=1, stroke_fill="black")
+        draw.text(text_position, str(landmark_index), fill="yellow", font=font)
+        
+    return image
+
+#予測結果を画像に描画
+def save_landmark_predictions(model, data_loader, device, num_samples=5, save_dir="./predictions_output_resnet50"):
+    model.eval()
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    saved_count = 0
+    
+    with torch.no_grad():
+        for images, targets, img_paths in data_loader:
+            if saved_count >= num_samples:
+                break
+                
+            images_tensor = images.to(device)
+            outputs = model(images_tensor).cpu() 
+
+            for i in range(images_tensor.size(0)):
+                if saved_count >= num_samples:
+                    break
+                    
+                # 元の画像の読み込み
+                original_img_path = img_paths[i]
+                original_image_pil = Image.open(original_img_path).convert("RGB")
+                
+                predicted_landmarks_flat = outputs[i].numpy() 
+                predicted_landmarks_reshaped = predicted_landmarks_flat.reshape(-1, 2) 
+
+                fig, ax = plt.subplots(figsize=(8, 8))
+                ax.imshow(original_image_pil)
+                
+                # 予測座標を元の画像サイズにスケーリング
+                original_w, original_h = original_image_pil.size
+                
+                scaled_landmarks_x = predicted_landmarks_reshaped[:, 0] * (original_w / IMG_SIZE)
+                scaled_landmarks_y = predicted_landmarks_reshaped[:, 1] * (original_h / IMG_SIZE)
+                
+                scaled_landmarks = np.stack([scaled_landmarks_x, scaled_landmarks_y], axis=1) 
+
+                # 1, 2個目の点を直径とする円 (赤色) の描画
+                p1 = scaled_landmarks[0]
+                p2 = scaled_landmarks[1]
+                center_x12 = (p1[0] + p2[0]) / 2
+                center_y12 = (p1[1] + p2[1]) / 2
+                diameter12 = np.linalg.norm(p1 - p2)
+                radius12 = diameter12 / 2
+                circle12 = plt.Circle((center_x12, center_y12), radius12, 
+                                     color='red', fill=False, linewidth=2)
+                ax.add_artist(circle12)
+                
+                # 3, 4個目の点を直径とする円 (赤色) の描画 
+                p3 = scaled_landmarks[2]
+                p4 = scaled_landmarks[3]
+                center_x34 = (p3[0] + p4[0]) / 2
+                center_y34 = (p3[1] + p4[1]) / 2
+                diameter34 = np.linalg.norm(p3 - p4)
+                radius34 = diameter34 / 2
+                circle34 = plt.Circle((center_x34, center_y34), radius34, 
+                                     color='red', fill=False, linewidth=2)
+                ax.add_artist(circle34)
+
+                
+                indices = [5, 7, 6, 8, 5] 
+                line_x = scaled_landmarks_x[indices]
+                line_y = scaled_landmarks_y[indices]
+                ax.plot(line_x, line_y, color='red', linestyle='-', linewidth=2)
+
+                # ランドマーク点を描画 
+                ax.scatter(scaled_landmarks_x, scaled_landmarks_y, 
+                           c='red', marker='o', s=50, label=None)
+                
+                # ランドマークに番号表示
+                for k_idx in range(NUM_LANDMARKS): 
+                    tmp = 10
+                    ax.annotate(str(k_idx+1), (scaled_landmarks_x[k_idx] + tmp + 1, scaled_landmarks_y[k_idx] + tmp + 1), color='black', fontsize=20, ha='center', va='center')
+                    ax.annotate(str(k_idx+1), (scaled_landmarks_x[k_idx] + tmp + 3, scaled_landmarks_y[k_idx] + tmp + 1), color='black', fontsize=20, ha='center', va='center')
+                    ax.annotate(str(k_idx+1), (scaled_landmarks_x[k_idx] + tmp + 1, scaled_landmarks_y[k_idx] + tmp + 3), color='black', fontsize=20, ha='center', va='center')
+                    ax.annotate(str(k_idx+1), (scaled_landmarks_x[k_idx] + tmp + 3, scaled_landmarks_y[k_idx] + tmp + 3), color='black', fontsize=20, ha='center', va='center')
+                    ax.annotate(str(k_idx+1), (scaled_landmarks_x[k_idx] + tmp + 2, scaled_landmarks_y[k_idx] + tmp + 2), color='yellow', fontsize=20, ha='center', va='center')
+
+
+                ax.set_title(f"Predicted Landmarks (Sample {saved_count+1})")
+                ax.axis('off')
+                
+               
+                base_name = os.path.basename(original_img_path)
+                save_path = os.path.join(save_dir, f"pred_geometric_{base_name}")
+                plt.savefig(save_path, bbox_inches='tight', pad_inches=0) 
+                plt.close(fig) 
+                
+                print(f"予測画像を保存: {save_path}")
+                saved_count += 1
+
+
+def train_model():
+    DATA_DIR = "./cropped_dataset"
+    BATCH_SIZE = 32
+    NUM_LANDMARKS = 9
+    NUM_EPOCHS = 30 
+    LEARNING_RATE = 0.001
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"訓練デバイス: {device}")
+
+    # --- データセット ---
+    all_files = glob.glob(os.path.join(DATA_DIR, "*.jpg"))
+    train_files, temp_files = train_test_split(all_files, test_size=0.2, random_state=42)
+    valid_files, test_files = train_test_split(temp_files, test_size=0.5, random_state=42)
+
+    train_dataset = LandmarkDataset(train_files, is_train=True)
+    valid_dataset = LandmarkDataset(valid_files, is_train=False)
+    test_dataset  = LandmarkDataset(test_files, is_train=False)
+
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+    valid_loader = DataLoader(valid_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    test_loader  = DataLoader(test_dataset , batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+
+    # --- モデル ---
+    model = LandmarkRegressor(num_landmarks=NUM_LANDMARKS).to(device)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+
+    # --- スケジューラ（ReduceLROnPlateau） ---
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3, verbose=True)
+
+    LOG_FILE = "log_resnet50.txt"
+    if os.path.exists(LOG_FILE):
+        os.remove(LOG_FILE)
+    with open(LOG_FILE, "w") as f:
+        f.write("Epoch,Train_MSE,Train_NME,Valid_MSE,Valid_NME\n")
+
+    # --- 訓練ループ ---
+    for epoch in range(NUM_EPOCHS):
+        model.train()
+        train_loss = 0.0
+        train_nme  = 0.0
+
+        for images, targets, _ in tqdm(train_loader, desc=f"Train {epoch+1}/{NUM_EPOCHS}"):
+            images, targets = images.to(device), targets.to(device)
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, targets)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+            train_nme  += calculate_nme(outputs, targets, device).item()
+
+        avg_train_loss = train_loss / len(train_loader)
+        avg_train_nme  = train_nme  / len(train_loader)
+
+        # --- 検証 ---
+        valid_loss, valid_nme = evaluate_model(model, valid_loader, criterion, device)
+
+        # --- スケジューラに検証損失を渡す ---
+        scheduler.step(valid_loss)
+
+        # --- ログ保存 ---
+        with open(LOG_FILE, "a") as f:
+            f.write(f"{epoch+1},{avg_train_loss:.6f},{avg_train_nme:.6f},{valid_loss:.6f},{valid_nme:.6f}\n")
+
+        print(f"[Epoch {epoch+1}]  Train MSE: {avg_train_loss:.4f}, Train NME: {avg_train_nme:.4f}, "
+              f"Valid MSE: {valid_loss:.4f}, Valid NME: {valid_nme:.4f}")
+
+    # --- 最終テスト ---
+    test_loss, test_nme = evaluate_model(model, test_loader, criterion, device)
+    print(f"Test MSE: {test_loss:.4f}, Test NME: {test_nme:.4f}")
+
+    torch.save(model.state_dict(), "model_resnet50.pth")
+    print("モデル保存完了: model_resnet50.pth")
+
+    return model, test_loader, device
+
+if __name__ == "__main__":
+    # 訓練を実行
+    trained_model, test_loader, device = train_model()
+
+    print("\n--- 予測ランドマークの描画と保存を開始 ---")
+    save_landmark_predictions(
+        model=trained_model,
+        data_loader=test_loader,
+        device=device,
+        num_samples=5,
+        save_dir="./predictions_output_resnet50"  # 保存フォルダは自由に変更
+    )
+    print("--- 予測ランドマークの描画と保存が完了しました ---")
