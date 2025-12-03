@@ -10,6 +10,7 @@ from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt 
 from tqdm import tqdm
 import numpy as np 
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
 
