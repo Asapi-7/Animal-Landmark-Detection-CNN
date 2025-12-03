@@ -155,86 +155,87 @@ class LandmarkDataset(Dataset):
 
 
 
-class BasicBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int,
-                 stride: int=1):
+class Bottleneck(nn.Module):
+    expansion = 4
+
+    def __init__(self, in_channels, out_channels, stride=1):
         super().__init__()
 
-        # 残差接続
-        self.conv1 = nn.Conv2d(in_channels, out_channels,
-                               kernel_size=3, stride=stride,
-                               padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels,
-                               kernel_size=3, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
+        mid_channels = out_channels
+
+        self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(mid_channels)
+
+        self.conv2 = nn.Conv2d(mid_channels, mid_channels, kernel_size=3,
+                               stride=stride, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(mid_channels)
+
+        self.conv3 = nn.Conv2d(mid_channels, out_channels * self.expansion,
+                               kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(out_channels * self.expansion)
+
         self.relu = nn.ReLU(inplace=True)
 
         self.downsample = None
-        if stride != 1 or in_channels != out_channels:
-             self.downsample = nn.Sequential(
-                 nn.Conv2d(in_channels, out_channels, kernel_size=1,
-                           stride=stride, bias=False),
-                 nn.BatchNorm2d(out_channels)
-             )
+        if stride != 1 or in_channels != out_channels * self.expansion:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels * self.expansion,
+                          kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels * self.expansion)
+            )
 
+    def forward(self, x):
+        identity = x
 
-    def forward(self, x: torch.Tensor):
-        identity = x 
-
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-        out = self.conv2(out)
-        out = self.bn2(out)
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.relu(self.bn2(self.conv2(out)))
+        out = self.bn3(self.conv3(out))
 
         if self.downsample is not None:
-             identity = self.downsample(identity)
+            identity = self.downsample(x)
 
         out += identity
         out = self.relu(out)
-
         return out
 
-class ResNet18(nn.Module):
 
-    def __init__(self, num_classes: int):
+# -------------------------
+# ResNet50
+# -------------------------
+class ResNet50(nn.Module):
+    def __init__(self, num_classes):
         super().__init__()
+
+        self.in_channels = 64
 
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2,
                                padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
 
-        self.max_pool = nn.MaxPool2d(kernel_size=3,
-                                     stride=2, padding=1)
+        self.max_pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
-        self.layer1 = nn.Sequential(
-            BasicBlock(64, 64),
-            BasicBlock(64, 64),
-        )
-        self.layer2 = nn.Sequential(
-            BasicBlock(64, 128, stride=2),
-            BasicBlock(128, 128),
-        )
-        self.layer3 = nn.Sequential(
-            BasicBlock(128, 256, stride=2),
-            BasicBlock(256, 256),
-        )
-        self.layer4 = nn.Sequential(
-            BasicBlock(256, 512, stride=2),
-            BasicBlock(512, 512),
-        )
+        # Bottleneck構造の層数は [3, 4, 6, 3]
+        self.layer1 = self._make_layer(64, 3)
+        self.layer2 = self._make_layer(128, 4, stride=2)
+        self.layer3 = self._make_layer(256, 6, stride=2)
+        self.layer4 = self._make_layer(512, 3, stride=2)
 
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Linear(512 * Bottleneck.expansion, num_classes)
 
-        self.linear = nn.Linear(512, num_classes) # num_classesはここでは仮の値
+    def _make_layer(self, out_channels, blocks, stride=1):
+        layers = []
+        layers.append(Bottleneck(self.in_channels, out_channels, stride))
+        self.in_channels = out_channels * Bottleneck.expansion
 
-   
-    def forward(self, x: torch.Tensor, return_embed: bool=False):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
+        for _ in range(1, blocks):
+            layers.append(Bottleneck(self.in_channels, out_channels))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x, return_embed=False):
+        x = self.relu(self.bn1(self.conv1(x)))
         x = self.max_pool(x)
 
         x = self.layer1(x)
@@ -248,10 +249,8 @@ class ResNet18(nn.Module):
         if return_embed:
             return x
 
-        x = self.linear(x)
-
+        x = self.fc(x)
         return x
-
 
 
 class LandmarkRegressor(nn.Module):
@@ -367,7 +366,7 @@ def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
     return image
 
 #予測結果を画像に描画
-def save_landmark_predictions(model, data_loader, device, num_samples=5, save_dir="./predictions_output_train3_val"):
+def save_landmark_predictions(model, data_loader, device, num_samples=5, save_dir="./predictions_output_resnet50"):
     model.eval()
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -547,6 +546,6 @@ if __name__ == "__main__":
         data_loader=test_loader,
         device=device,
         num_samples=5,
-        save_dir="./predictions_resnet50"  # 保存フォルダは自由に変更
+        save_dir="./predictions_output_resnet50"  # 保存フォルダは自由に変更
     )
     print("--- 予測ランドマークの描画と保存が完了しました ---")
