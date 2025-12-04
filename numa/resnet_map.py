@@ -243,7 +243,7 @@ def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
 #予測結果を画像に描画
 
 def save_landmark_predictions(model, data_loader, device, num_samples=5, save_dir="./predictions_map"):
-    model.eval()
+    modelneval()
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
@@ -368,3 +368,18 @@ def train_model():
     print("モデル保存完了: model_map.pth")
 
     return model, test_loader, device
+
+
+if __name__ == "__main__":
+    # 訓練を実行
+    trained_model, test_loader, device = train_model()
+
+    print("\n予測ランドマークの描画と保存を開始 ")
+    save_landmark_predictions(
+        model=trained_model,
+        data_loader=test_loader,
+        device=device,
+        num_samples=5,
+        save_dir="./predictions_map"  # 保存フォルダは自由に変更
+    )
+    print("--- 予測ランドマークの描画と保存が完了しました ---")
