@@ -242,7 +242,7 @@ def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
 
 #予測結果を画像に描画
 
-def save_landmark_predictions(model, data_loader, device, num_samples=5, save_dir="./predictions_output_train3_val"):
+def save_landmark_predictions(model, data_loader, device, num_samples=5, save_dir="./predictions_map"):
     model.eval()
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -325,7 +325,7 @@ def train_model():
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    LOG_FILE = "train_heatmap_log.txt"
+    LOG_FILE = "log_resnet_map.txt"
     if os.path.exists(LOG_FILE):
         os.remove(LOG_FILE)
     with open(LOG_FILE, "w") as f:
@@ -364,7 +364,7 @@ def train_model():
     test_loss, test_nme = evaluate_model(model, test_loader, criterion, device)
     print(f"Test MSE: {test_loss:.4f}, Test NME: {test_nme:.4f}")
 
-    torch.save(model.state_dict(), "model_heatmap.pth")
-    print("モデル保存完了: model_heatmap.pth")
+    torch.save(model.state_dict(), "model_map.pth")
+    print("モデル保存完了: model_map.pth")
 
     return model, test_loader, device
