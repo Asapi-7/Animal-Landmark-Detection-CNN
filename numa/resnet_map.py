@@ -1,15 +1,24 @@
 import os
+import glob
+
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-from torchvision.transforms import functional as F 
-from PIL import Image, ImageDraw, ImageFont 
-import glob
-from sklearn.model_selection import train_test_split
-import matplotlib.pyplot as plt 
-from tqdm import tqdm
-import numpy as np 
+
 from torchvision.models import resnet18, ResNet18_Weights
+from torchvision import transforms
+from torchvision.transforms import functional as F  # F.affine などを使う場合のみ必要
+
+from PIL import Image, ImageDraw, ImageFont
+
+import numpy as np
+
+# データ分割 
+from sklearn.model_selection import train_test_split
+
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+
 
 
 IMG_SIZE = 224
@@ -44,45 +53,14 @@ def load_landmarks_from_pts_to_tensor(pts_path):
     return torch.tensor(points, dtype=torch.float32)
 
 
-def generate_gaussian_heatmap(landmarks, heatmap_size=HEATMAP_SIZE, sigma=SIGMA):
-    """
-    landmarks: tensor [18] -> (x1, y1, x2, y2, ...)
-    """
-    num_landmarks = len(landmarks) // 2
-    heatmaps = np.zeros((num_landmarks, heatmap_size, heatmap_size), dtype=np.float32)
-    
-    for i in range(num_landmarks):
-        x, y = landmarks[2*i].item(), landmarks[2*i+1].item()
-        # 元画像サイズからヒートマップサイズにスケール
-        x = x * heatmap_size / IMG_SIZE
-        y = y * heatmap_size / IMG_SIZE
-
-        xx = np.arange(heatmap_size)
-        yy = np.arange(heatmap_size)
-        yy, xx = np.meshgrid(yy, xx)
-        heatmaps[i] = np.exp(-((xx - x)**2 + (yy - y)**2) / (2*sigma**2))
-    
-    return torch.tensor(heatmaps, dtype=torch.float32)
-
 class LandmarkDataset(Dataset):
-    def __init__(self, file_paths, is_train=False):
+    def __init__(self, file_paths):
         self.image_files = file_paths
-        self.is_train = is_train
-        self.W = IMG_SIZE
-
-        # Tensor化・正規化
         self.transform_tensor = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225])
         ])
-
-        if is_train:
-            self.affine_transform = RandomRotation(degrees=(-10, 10), W=self.W)
-            self.hflip_transform = RandomHorizontalFlip(p=0.5, W=self.W)
-        else:
-            self.affine_transform = None
-            self.hflip_transform = None
 
     def __len__(self):
         return len(self.image_files)
@@ -94,24 +72,34 @@ class LandmarkDataset(Dataset):
         image = Image.open(img_path).convert("RGB")
         landmarks = load_landmarks_from_pts_to_tensor(pts_path)
 
-        if self.is_train:
-            image, landmarks = self.affine_transform(image, landmarks)
-            image, landmarks = self.hflip_transform(image, landmarks)
-
         image = self.transform_tensor(image)
-        heatmaps = generate_gaussian_heatmap(landmarks)
+        return image, landmarks, img_path
 
-        return image, heatmaps, img_path
+
+def generate_gaussian_heatmap_batch(landmarks_batch, heatmap_size=HEATMAP_SIZE, sigma=SIGMA, device='cuda'):
+    B = landmarks_batch.shape[0]
+    num_landmarks = landmarks_batch.shape[1] // 2
+    heatmaps = torch.zeros((B, num_landmarks, heatmap_size, heatmap_size), device=device)
+
+    xx = torch.arange(heatmap_size, device=device).view(1, 1, heatmap_size).float()
+    yy = torch.arange(heatmap_size, device=device).view(1, heatmap_size, 1).float()
+
+    for b in range(B):
+        for i in range(num_landmarks):
+            x = landmarks_batch[b, 2*i] * heatmap_size / IMG_SIZE
+            y = landmarks_batch[b, 2*i+1] * heatmap_size / IMG_SIZE
+            heatmaps[b, i] = torch.exp(-((xx - x)**2 + (yy - y)**2) / (2*sigma**2))
+
+    return heatmaps
+
 
 
 class LandmarkHeatmapRegressor(nn.Module):
-    def __init__(self, num_landmarks=9, output_size=56, pretrained=True):
+    def __init__(self, num_landmarks=NUM_LANDMARKS, output_size=HEATMAP_SIZE, pretrained=True):
         super().__init__()
-        # ResNet18 backbone
         weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
         backbone = resnet18(weights=weights)
-        
-        # 最後のFCをIdentityにして特徴マップを保持
+
         self.backbone = nn.Sequential(
             backbone.conv1,
             backbone.bn1,
@@ -122,7 +110,7 @@ class LandmarkHeatmapRegressor(nn.Module):
             backbone.layer3,
             backbone.layer4
         )
-        
+
         self.deconv_layers = nn.Sequential(
             nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(256),
@@ -135,56 +123,46 @@ class LandmarkHeatmapRegressor(nn.Module):
         self.output_size = output_size
 
     def forward(self, x):
-        x = self.backbone(x)  # (B, 512, H/32, W/32)
-        heatmaps = self.deconv_layers(x)  # (B, num_landmarks, output_size, output_size)
+        x = self.backbone(x)
+        heatmaps = self.deconv_layers(x)
         return heatmaps
 
-def heatmap_to_coord(heatmaps):
-    """
-    heatmaps: (B, num_landmarks, H, W)
-    return: coords (B, num_landmarks, 2)
-    """
-    B, L, H, W = heatmaps.shape
-    coords = torch.zeros(B, L, 2, device=heatmaps.device)
 
+
+def heatmap_to_coord(heatmaps):
+    B, N, H, W = heatmaps.shape
+    coords = torch.zeros((B, N*2), device=heatmaps.device)
     for b in range(B):
-        for l in range(L):
-            hmap = heatmaps[b, l]
-            idx = torch.argmax(hmap)
+        for i in range(N):
+            hm = heatmaps[b, i]
+            idx = torch.argmax(hm)
             y, x = divmod(idx.item(), W)
-            coords[b, l] = torch.tensor([x, y], device=heatmaps.device)
+            coords[b, 2*i] = x * IMG_SIZE / W
+            coords[b, 2*i+1] = y * IMG_SIZE / H
     return coords
 
-def evaluate_model(model, data_loader, criterion, device):
-    model.eval()
-    total_loss = 0
-    total_nme = 0
-    count = 0
 
-    with torch.no_grad():
-        for data in data_loader:
-            imgs, labels = data[0].to(device), data[1].to(device)
-            
-            # モデル出力はヒートマップ (B, num_landmarks, H, W)
-            outputs = model(imgs)
-            
-            # labels をヒートマップに変換して MSE 損失
-            target_heatmaps = generate_gaussian_heatmap(labels_scaled, heatmap_size=outputs.shape[2])
-            target_heatmaps = target_heatmaps.to(device)
-            
-            loss = criterion(outputs, target_heatmaps)
-            total_loss += loss.item() * imgs.size(0)
-            
-            # NME 計算のため座標に変換
-            pred_coords = heatmap_to_coord(outputs)
-            nme_batch = calculate_nme(pred_coords, labels, device)
-            total_nme += nme_batch.item() * imgs.size(0)
-            
-            count += imgs.size(0)
-
-    avg_loss = total_loss / count
-    avg_nme = total_nme / count
-    return avg_loss, avg_nme
+def calculate_normalization_factor(landmarks): 
+    #ランドマーク [N, 18] から、バウンディングボックスの対角線長を計算する。
+    
+    # 座標を (N, 9, 2) に整形: (x1, y1, x2, y2, ...) -> ((x1, y1), (x2, y2), ...)
+    coords = landmarks.reshape(-1, 9, 2)
+    
+    # バウンディングボックスの計算 (全点の min/max を使用)
+    x_min = coords[..., 0].min(dim=1).values
+    x_max = coords[..., 0].max(dim=1).values
+    y_min = coords[..., 1].min(dim=1).values
+    y_max = coords[..., 1].max(dim=1).values
+    
+    # 対角線長の計算: sqrt((x_max - x_min)^2 + (y_max - y_min)^2)
+    width = x_max - x_min
+    height = y_max - y_min
+    
+    # 対角線長 (NMEの正規化基準)
+    diagonal = torch.sqrt(width**2 + height**2)
+    
+    # 対角線長がゼロになるのを防ぐため、小さな値を加える
+    return diagonal + 1e-6
 
 
 def calculate_nme(outputs, labels, device):
@@ -209,6 +187,23 @@ def calculate_nme(outputs, labels, device):
     nme = normalized_distances.mean()
 
     return nme
+
+def evaluate_model(model, data_loader, criterion, device):
+    model.eval()
+    total_loss = 0.0
+    total_nme = 0.0
+    with torch.no_grad():
+        for images, targets, _ in data_loader:
+            images = images.to(device)
+            targets = targets.to(device)
+            target_heatmaps = generate_gaussian_heatmap_batch(targets, device=device)
+            outputs = model(images)
+            loss = criterion(outputs, target_heatmaps)
+            total_loss += loss.item()
+            pred_coords = heatmap_to_coord(outputs)
+            total_nme += calculate_nme(pred_coords, targets, device).item()
+    return total_loss / len(data_loader), total_nme / len(data_loader)
+
 
 
 #ランドマーク描画
@@ -303,7 +298,6 @@ def save_landmark_predictions(model, data_loader, device, num_samples=5, save_di
 def train_model():
     DATA_DIR = "./cropped_dataset"
     BATCH_SIZE = 32
-    NUM_LANDMARKS = 9
     NUM_EPOCHS = 20
     LEARNING_RATE = 0.001
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -313,7 +307,7 @@ def train_model():
     train_files, temp_files = train_test_split(all_files, test_size=0.2, random_state=42)
     valid_files, test_files = train_test_split(temp_files, test_size=0.5, random_state=42)
 
-    train_dataset = LandmarkDataset(train_files, is_train=True)
+    train_dataset = LandmarkDataset(train_files)
     valid_dataset = LandmarkDataset(valid_files)
     test_dataset  = LandmarkDataset(test_files)
 
@@ -321,24 +315,20 @@ def train_model():
     valid_loader = DataLoader(valid_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
     test_loader  = DataLoader(test_dataset , batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 
-    model = LandmarkRegressor(num_landmarks=NUM_LANDMARKS, img_size=IMG_SIZE).to(device)
+    model = LandmarkHeatmapRegressor().to(device)
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     LOG_FILE = "log_resnet_map.txt"
-    if os.path.exists(LOG_FILE):
-        os.remove(LOG_FILE)
     with open(LOG_FILE, "w") as f:
         f.write("Epoch,Train_MSE,Train_NME,Valid_MSE,Valid_NME\n")
 
     for epoch in range(NUM_EPOCHS):
         model.train()
-        train_loss = 0.0
-        train_nme  = 0.0
         for images, targets, _ in tqdm(train_loader, desc=f"Train {epoch+1}/{NUM_EPOCHS}"):
             images = images.to(device)
             targets = targets.to(device)
-            target_heatmaps = generate_gaussian_heatmap(targets, heatmap_size=IMG_SIZE).to(device)
+            target_heatmaps = generate_gaussian_heatmap_batch(targets, device=device)
 
             optimizer.zero_grad()
             outputs = model(images)
@@ -346,27 +336,16 @@ def train_model():
             loss.backward()
             optimizer.step()
 
-            train_loss += loss.item()
-            pred_coords = heatmap_to_coord(outputs)
-            train_nme += calculate_nme(pred_coords, targets, device).item()
-
-        avg_train_loss = train_loss / len(train_loader)
-        avg_train_nme  = train_nme / len(train_loader)
+        # 評価
+        train_loss, train_nme = evaluate_model(model, train_loader, criterion, device)
         valid_loss, valid_nme = evaluate_model(model, valid_loader, criterion, device)
-
-        with open(LOG_FILE, "a") as f:
-            f.write(f"{epoch+1},{avg_train_loss:.6f},{avg_train_nme:.6f},{valid_loss:.6f},{valid_nme:.6f}\n")
-
-        print(f"[Epoch {epoch+1}] Train MSE: {avg_train_loss:.4f}, Train NME: {avg_train_nme:.4f}, "
+        print(f"[Epoch {epoch+1}] Train MSE: {train_loss:.4f}, Train NME: {train_nme:.4f}, "
               f"Valid MSE: {valid_loss:.4f}, Valid NME: {valid_nme:.4f}")
-
-    # テスト評価
-    test_loss, test_nme = evaluate_model(model, test_loader, criterion, device)
-    print(f"Test MSE: {test_loss:.4f}, Test NME: {test_nme:.4f}")
+        with open(LOG_FILE, "a") as f:
+            f.write(f"{epoch+1},{train_loss:.6f},{train_nme:.6f},{valid_loss:.6f},{valid_nme:.6f}\n")
 
     torch.save(model.state_dict(), "model_map.pth")
     print("モデル保存完了: model_map.pth")
-
     return model, test_loader, device
 
 
