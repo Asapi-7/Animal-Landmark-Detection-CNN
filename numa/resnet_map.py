@@ -194,14 +194,18 @@ def evaluate_model(model, data_loader, criterion, device):
     total_nme = 0.0
     with torch.no_grad():
         for images, targets, _ in data_loader:
-            images = images.to(device)
-            targets = targets.to(device)
-            target_heatmaps = generate_gaussian_heatmap_batch(targets, device=device)
-            outputs = model(images)
-            loss = criterion(outputs, target_heatmaps)
-            total_loss += loss.item()
-            pred_coords = heatmap_to_coord(outputs)
-            total_nme += calculate_nme(pred_coords, targets, device).item()
+            try:
+                images = images.to(device)
+                targets = targets.to(device)
+                target_heatmaps = generate_gaussian_heatmap_batch(targets, device=device)
+                outputs = model(images)
+                loss = criterion(outputs, target_heatmaps)
+                total_loss += loss.item()
+                pred_coords = heatmap_to_coord(outputs)
+                total_nme += calculate_nme(pred_coords, targets, device).item()
+            except Exception as e:
+                print("Error in evaluate_model:", e)
+                break
     return total_loss / len(data_loader), total_nme / len(data_loader)
 
 
