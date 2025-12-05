@@ -390,7 +390,7 @@ def evaluate_retinanet(model, dataloader, device, iou_threshold=0.5):
 
 # ------------------------------------------------------------------------------
 # 学習するエポック数
-num_epochs = 17
+num_epochs = 20
 
 # 学習
 for epoch in range(num_epochs):
@@ -448,7 +448,7 @@ for epoch in range(num_epochs):
 #------------------------------------------------------------------------------------
 
 # モデルの重みを保存
-torch.save(model.state_dict(), 'retinanet1811_weights_SGD.pth')
+torch.save(model.state_dict(), 'retinanet183_weights_SGD.pth')
 
 # 学習後にIoUを評価
 evaluate_retinanet(model, test_loader, device, iou_threshold=0.5)
