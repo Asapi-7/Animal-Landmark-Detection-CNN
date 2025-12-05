@@ -24,7 +24,7 @@ from tqdm import tqdm
 IMG_SIZE = 224
 HEATMAP_SIZE = 56  # 出力ヒートマップサイズ
 NUM_LANDMARKS = 9
-SIGMA = 1.5  # ガウシアンの標準偏差
+SIGMA = 5  # ガウシアンの標準偏差
 
 
 # ランドマーク座標 (.pts) の読み込み関数
@@ -95,36 +95,56 @@ def generate_gaussian_heatmap_batch(landmarks_batch, heatmap_size=HEATMAP_SIZE, 
 
 
 class LandmarkHeatmapRegressor(nn.Module):
-    def __init__(self, num_landmarks=NUM_LANDMARKS, output_size=HEATMAP_SIZE, pretrained=True):
+    def __init__(self, num_landmarks=NUM_LANDMARKS, pretrained=True):
         super().__init__()
         weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
         backbone = resnet18(weights=weights)
 
-        self.backbone = nn.Sequential(
-            backbone.conv1,
-            backbone.bn1,
-            backbone.relu,
-            backbone.maxpool,
-            backbone.layer1,
-            backbone.layer2,
-            backbone.layer3,
-            backbone.layer4
-        )
+        # Backbone (各層を個別に保持)
+        self.conv1 = nn.Sequential(backbone.conv1, backbone.bn1, backbone.relu, backbone.maxpool)
+        self.layer1 = backbone.layer1 # ResNet-18: 64チャネル
+        self.layer2 = backbone.layer2 # ResNet-18: 128チャネル, 1/16
+        self.layer3 = backbone.layer3 # ResNet-18: 256チャネル, 1/32
+        self.layer4 = backbone.layer4 # ResNet-18: 512チャネル, 1/32
 
-        self.deconv_layers = nn.Sequential(
+        # Deconv Head (逆順にアップサンプリング)
+        # 1. C5 (512ch) -> 256ch (1/16)
+        self.deconv1 = nn.Sequential(
             nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=True)
+        )
+        # Skip Connection for C4 (256ch) - C3の出力と加算/結合を検討
+        
+        # 2. 256ch -> 128ch (1/8)
+        self.deconv2 = nn.Sequential(
             nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(128, num_landmarks, kernel_size=4, stride=2, padding=1)
+            nn.ReLU(inplace=True)
         )
-        self.output_size = output_size
+        # Skip Connection for C3 (128ch)
+        
+        # 3. 128ch -> num_landmarks (1/4)
+        self.deconv3 = nn.ConvTranspose2d(128, num_landmarks, kernel_size=4, stride=2, padding=1)
 
     def forward(self, x):
-        x = self.backbone(x)
-        heatmaps = self.deconv_layers(x)
+        # Encoder (特徴抽出)
+        x_c1 = self.conv1(x)
+        x_c2 = self.layer1(x_c1)
+        x_c3 = self.layer2(x_c2) # 128chの特徴量（Skip Connection候補1）
+        x_c4 = self.layer3(x_c3) # 256chの特徴量（Skip Connection候補2）
+        x_c5 = self.layer4(x_c4) # 512chの最終特徴量
+
+        # Decoder (ヒートマップ生成)
+        x_d1 = self.deconv1(x_c5)
+        # Skip Connection 1: Add x_c4 to the output of deconv1. 
+        # (ただし、特徴マップのサイズとチャネル数を揃えるための処理が必要になることが多い)
+        # 例: x_d1 = x_d1 + self.skip1_layer(x_c4)
+
+        x_d2 = self.deconv2(x_d1)
+        # Skip Connection 2: Add x_c3 to the output of deconv2.
+        
+        heatmaps = self.deconv3(x_d2)
         return heatmaps
 
 
@@ -302,7 +322,7 @@ def save_landmark_predictions(model, data_loader, device, num_samples=5, save_di
 def train_model():
     DATA_DIR = "./cropped_dataset"
     BATCH_SIZE = 32
-    NUM_EPOCHS = 20
+    NUM_EPOCHS = 9
     LEARNING_RATE = 0.001
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"訓練デバイス: {device}")
@@ -311,13 +331,17 @@ def train_model():
     train_files, temp_files = train_test_split(all_files, test_size=0.2, random_state=42)
     valid_files, test_files = train_test_split(temp_files, test_size=0.5, random_state=42)
 
+    print("Train files:", len(train_files))
+    print("Valid files:", len(valid_files))
+    print("Test files:", len(test_files))
+
     train_dataset = LandmarkDataset(train_files)
     valid_dataset = LandmarkDataset(valid_files)
     test_dataset  = LandmarkDataset(test_files)
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
-    valid_loader = DataLoader(valid_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
-    test_loader  = DataLoader(test_dataset , batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=3)
+    valid_loader = DataLoader(valid_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=3)
+    test_loader  = DataLoader(test_dataset , batch_size=BATCH_SIZE, shuffle=False, num_workers=3)
 
     model = LandmarkHeatmapRegressor().to(device)
     criterion = nn.MSELoss()
@@ -356,6 +380,12 @@ def train_model():
 if __name__ == "__main__":
     # 訓練を実行
     trained_model, test_loader, device = train_model()
+
+    print("\n最終テスト評価")
+    criterion = torch.nn.MSELoss()
+    test_loss, test_nme = evaluate_model(trained_model, test_loader, criterion, device)
+    print(f"Test MSE: {test_loss:.4f}")
+    print(f"Test NME: {test_nme:.4f}")
 
     print("\n予測ランドマークの描画と保存を開始 ")
     save_landmark_predictions(
