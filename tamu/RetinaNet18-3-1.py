@@ -101,56 +101,36 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
 
         if boxes_np.size > 0:
             x1, y1, x2, y2 = boxes_np[0]
-        if x2 - x1 < 1 or y2 - y1 < 1:  # width or height が 1 ピクセル未満
-            boxes_np = np.empty((0, 4), dtype=np.float32)
-            labels_np = np.empty((0,), dtype=np.int64)
+            if x2 - x1 < 1 or y2 - y1 < 1:
+                boxes_np = np.empty((0, 4), dtype=np.float32)
+                labels_np = np.empty((0,), dtype=np.int64)
 
-        # データ拡張
+        # --- Albumentations augment ---
         if self.augment and boxes_np.size > 0:
-
-            x1, y1, x2, y2 = boxes_np[0]
-            
-            # 左右反転
-            if random.random() > 0.5:
-                img = T.functional.hflip(img)  # PIL の左右反転
-                width, height = img.size
-
-                # BBox も左右反転
-                x1_new = width - x2
-                x2_new = width - x1
-                
-                x1 = min(x1_new, x2_new)
-                x2 = max(x1_new, x2_new)
-
-            boxes_np = np.array([[x1, y1, x2, y2]], dtype=np.float32)
-
-            # 2色変換
-            if self.color_transform is not None:
-                img = self.color_transform(img)
-
-            # Tensor に変換
-            img = T.functional.to_tensor(img)
+            augmented = self.augment_transform(
+                image=np.array(img),
+                bboxes=boxes_np.tolist(),
+                labels=labels_np.tolist()
+            )
+            img = augmented['image']
+            boxes_np = np.array(augmented['bboxes'], dtype=np.float32)
+            labels_np = np.array(augmented['labels'], dtype=np.int64)
 
         else:
-            # augment が無い場合画像変換の適用
-            if self.transforms is not None:
-                img = self.transforms(img) # 前処理を適用
-            else:
-                img = T.functional.to_tensor(img)
+            img = T.functional.to_tensor(img)
 
-        # ターゲット辞書の作成
-        if boxes_np.size == 0: # バウンディングボックスが空なら空のテンソルを作成
-            boxes = torch.empty((0, 4), dtype=torch.float32)
+        if boxes_np.size == 0:
+            boxes = torch.empty((0,4), dtype=torch.float32)
             labels = torch.empty((0,), dtype=torch.int64)
-        else: # NumPy配列をPytorchテンソルに変換
+        else:
             boxes = torch.as_tensor(boxes_np, dtype=torch.float32)
             labels = torch.as_tensor(labels_np, dtype=torch.int64)
-        
+
         target = {
             "boxes": boxes,
             "labels": labels,
             "image_id": torch.tensor([idx]),
-        } # ターゲット辞書の構築
+        }
 
         return img, target
     
