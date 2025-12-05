@@ -240,7 +240,7 @@ def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
 
 #予測結果を画像に描画
 def save_landmark_predictions(model, data_loader, device, num_samples=5, save_dir="./predictions_map"):
-    modelneval()
+    model.eval()
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
