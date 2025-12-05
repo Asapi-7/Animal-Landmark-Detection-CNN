@@ -194,10 +194,16 @@ def main():
     args = parse_args()
     device = torch.device(args.device)
     model = build_model(device, num_classes=args.num_classes, pretrained_backbone=False, weights_path=args.weights)
-    boxes, scores = run_inference_on_image(model, args.image, device, score_thresh=args.score, draw=True, out_path=args.out)
+
+    boxes, scores, inference_time = run_inference_on_image(
+        model, args.image, device, score_thresh=args.score, draw=True, out_path=args.out
+    )
+
+    print(f"Inference Time: {inference_time:.2f} ms")
     print("Detections:", len(boxes))
     for b, s in zip(boxes, scores):
         print(f"score={s:.3f}, box={b}")
+
 
 if __name__ == "__main__":
     main()
