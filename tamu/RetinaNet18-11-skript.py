@@ -10,6 +10,8 @@ from torchvision.models.detection.anchor_utils import AnchorGenerator
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import time
+
 
 # ----- ユーザー側ファイルをインポート -----
 # RetinaNet18-11.py 側で使っているバックボーン実装と（もし別ファイルなら）resnet18を提供するモジュール名に合わせる
@@ -130,13 +132,17 @@ def run_inference_on_image(model, image_path, device, score_thresh=0.5, draw=Tru
     transform = make_transform()
     img_pil = Image.open(image_path).convert("RGB")
     img_tensor = transform(img_pil).to(device)
+    start_time = time.time()
 
     # モデルは list[Tensor] を受け取ることに注意
     with torch.no_grad():
         outputs = model([img_tensor])
 
+    end_time = time.time()
+    inference_time = (end_time - start_time) * 1000.0  # ミリ秒
+
     if len(outputs) == 0:
-        return [], []
+        return [], [], inference_time
 
     out = outputs[0]
     boxes = out.get("boxes", torch.zeros((0,4))).cpu().numpy()
@@ -151,7 +157,7 @@ def run_inference_on_image(model, image_path, device, score_thresh=0.5, draw=Tru
     if draw:
         draw_image_and_save(img_pil, boxes, scores, labels, out_path or f"{os.path.splitext(image_path)[0]}_pred.png")
 
-    return boxes, scores
+    return boxes, scores, inference_time
 
 # ----- 描画関数 -----
 def draw_image_and_save(pil_img, boxes, scores, labels, out_path):
