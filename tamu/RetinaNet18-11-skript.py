@@ -81,7 +81,7 @@ def build_model(device, num_classes=2, pretrained_backbone=False, weights_path=N
     weights_path: 学習済み重みのパス（.pth）
     """
     # 1) バックボーン（resnet18）を return_features=True で作る
-    resnet = resnet18(pretrained=pretrained_backbone, return_features=True)
+    resnet = resnet18(pretrained=pretrained_backbone)
 
     # 2) FPN を構築（学習時と同じチャネル数であること）
     fpn_out_channels = 256
