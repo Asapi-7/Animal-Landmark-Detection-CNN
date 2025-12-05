@@ -28,6 +28,8 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split # データ分割用
 from PIL import Image # 画像ファイルの読み込みとRBG変換
 import random # データ拡張
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 #----------------------------------------------------------------------------------
 # データセットを整えるクラス
@@ -39,6 +41,18 @@ class CustomObjectDetectionDataset(Dataset): # DAtasetクラスを継承
         self.imgs = img_list # 画像パスのリストを保持する
         self.augment = augment # データ拡張用
         self.color_transform = T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.02 ) # 色変換用
+        self.augment_transform = A.Compose([ # データ拡張
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.1),
+            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.02, p=0.5),
+            A.Affine(translate_percent={'x': (-0.02, 0.02), 'y': (-0.02, 0.02)}, scale=(0.95, 1.05),rotate=(-5, 5),border_mode=4, p=0.4),
+            ToTensorV2()
+        ], 
+        bbox_params=A.BboxParams(
+            format='pascal_voc',
+            label_fields=['labels'],
+            min_visibility=0.5,
+        ))
 
     # バウンディングボックスの情報を抽出する    
     def _parse_pts(self, pts_path):
