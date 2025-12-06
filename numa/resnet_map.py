@@ -1,21 +1,14 @@
 import os
 import glob
-
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-
 from torchvision.models import resnet18, ResNet18_Weights
 from torchvision import transforms
-from torchvision.transforms import functional as F  # F.affine などを使う場合のみ必要
-
+from torchvision.transforms import functional as F  
 from PIL import Image, ImageDraw, ImageFont
-
 import numpy as np
-
-# データ分割 
 from sklearn.model_selection import train_test_split
-
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
@@ -100,50 +93,36 @@ class LandmarkHeatmapRegressor(nn.Module):
         weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
         backbone = resnet18(weights=weights)
 
-        # Backbone (各層を個別に保持)
         self.conv1 = nn.Sequential(backbone.conv1, backbone.bn1, backbone.relu, backbone.maxpool)
-        self.layer1 = backbone.layer1 # ResNet-18: 64チャネル
-        self.layer2 = backbone.layer2 # ResNet-18: 128チャネル, 1/16
-        self.layer3 = backbone.layer3 # ResNet-18: 256チャネル, 1/32
-        self.layer4 = backbone.layer4 # ResNet-18: 512チャネル, 1/32
+        self.layer1 = backbone.layer1 
+        self.layer2 = backbone.layer2 
+        self.layer3 = backbone.layer3 
+        self.layer4 = backbone.layer4 
 
-        # Deconv Head (逆順にアップサンプリング)
-        # 1. C5 (512ch) -> 256ch (1/16)
         self.deconv1 = nn.Sequential(
             nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(256),
             nn.ReLU(inplace=True)
         )
-        # Skip Connection for C4 (256ch) - C3の出力と加算/結合を検討
-        
-        # 2. 256ch -> 128ch (1/8)
+     
         self.deconv2 = nn.Sequential(
             nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(inplace=True)
         )
-        # Skip Connection for C3 (128ch)
-        
-        # 3. 128ch -> num_landmarks (1/4)
+      
         self.deconv3 = nn.ConvTranspose2d(128, num_landmarks, kernel_size=4, stride=2, padding=1)
 
     def forward(self, x):
-        # Encoder (特徴抽出)
         x_c1 = self.conv1(x)
         x_c2 = self.layer1(x_c1)
-        x_c3 = self.layer2(x_c2) # 128chの特徴量（Skip Connection候補1）
-        x_c4 = self.layer3(x_c3) # 256chの特徴量（Skip Connection候補2）
-        x_c5 = self.layer4(x_c4) # 512chの最終特徴量
+        x_c3 = self.layer2(x_c2) 
+        x_c4 = self.layer3(x_c3) 
+        x_c5 = self.layer4(x_c4) 
 
-        # Decoder (ヒートマップ生成)
-        x_d1 = self.deconv1(x_c5)
-        # Skip Connection 1: Add x_c4 to the output of deconv1. 
-        # (ただし、特徴マップのサイズとチャネル数を揃えるための処理が必要になることが多い)
-        # 例: x_d1 = x_d1 + self.skip1_layer(x_c4)
-
+        x_d1 = self.deconv1(x_c5)    
         x_d2 = self.deconv2(x_d1)
-        # Skip Connection 2: Add x_c3 to the output of deconv2.
-        
+   
         heatmaps = self.deconv3(x_d2)
         return heatmaps
 
@@ -260,9 +239,8 @@ def draw_landmarks_pil(image, landmarks, color='red', point_size=5):
     return image
 
 #予測結果を画像に描画
-
 def save_landmark_predictions(model, data_loader, device, num_samples=5, save_dir="./predictions_map"):
-    modelneval()
+    model.eval()
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
@@ -273,7 +251,7 @@ def save_landmark_predictions(model, data_loader, device, num_samples=5, save_di
                 break
 
             images_tensor = images.to(device)
-            outputs = model(images_tensor)  # (B, num_landmarks, H, W)
+            outputs = model(images_tensor) 
 
             # ヒートマップ → 座標に変換
             pred_coords_batch = heatmap_to_coord(outputs)
@@ -297,8 +275,6 @@ def save_landmark_predictions(model, data_loader, device, num_samples=5, save_di
                 # 描画
                 fig, ax = plt.subplots(figsize=(8, 8))
                 ax.imshow(original_image_pil)
-
-                # 例：ランドマーク線や円も描画したい場合はここで scaled_landmarks を使用
                 ax.scatter(scaled_landmarks[:, 0], scaled_landmarks[:, 1],
                            c='red', marker='o', s=50)
 
@@ -393,6 +369,6 @@ if __name__ == "__main__":
         data_loader=test_loader,
         device=device,
         num_samples=5,
-        save_dir="./predictions_map"  # 保存フォルダは自由に変更
+        save_dir="./predictions_map"  
     )
-    print("--- 予測ランドマークの描画と保存が完了しました ---")
+    print("予測ランドマークの描画と保存が完了しました")
