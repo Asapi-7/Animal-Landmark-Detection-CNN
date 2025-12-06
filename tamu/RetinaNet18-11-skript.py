@@ -190,6 +190,30 @@ def parse_args():
     p.add_argument("--num-classes", type=int, default=2, help="Number of classes (default: 2)")
     return p.parse_args()
 
+def measure_average_inference_time(model, image_path, device, score_thresh=0.5, repeat=50):
+        transform = make_transform()
+        img_pil = Image.open(image_path).convert("RGB")
+        img_tensor = transform(img_pil).to(device)
+
+    # ----- Warm-up -----
+        for _ in range(5):
+            _ = model([img_tensor])
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+
+    # ----- Repeat推論 -----
+        times = []
+        for _ in range(repeat):
+            start = time.time()
+            _ = model([img_tensor])
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            end = time.time()
+            times.append((end - start) * 1000.0)  # ms
+
+        avg_ms = sum(times) / len(times)
+        return avg_ms
+
 def main():
     args = parse_args()
     device = torch.device(args.device)
@@ -198,6 +222,9 @@ def main():
     boxes, scores, inference_time = run_inference_on_image(
         model, args.image, device, score_thresh=args.score, draw=True, out_path=args.out
     )
+
+    avg_time = measure_average_inference_time(model, args.image, device)
+    print(f"Average inference time (50 runs): {avg_time:.2f} ms")
 
     print(f"Inference Time: {inference_time:.2f} ms")
     print("Detections:", len(boxes))
