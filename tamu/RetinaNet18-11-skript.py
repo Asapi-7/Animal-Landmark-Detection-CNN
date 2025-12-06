@@ -9,12 +9,11 @@ from torchvision.models.detection import RetinaNet
 from torchvision.models.detection.anchor_utils import AnchorGenerator
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 import time
 import glob
 
 
-# ----- ユーザー側ファイルをインポート -----
+# ----- backbone の import -----
 try:
     from resnet18_backbone import resnet18
 except Exception as e:
@@ -33,6 +32,7 @@ class FeaturePyramidNetwork(nn.Module):
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
             for _ in in_channels_list
         ])
+
         self.p6 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
         self.p7 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
 
@@ -49,8 +49,8 @@ class FeaturePyramidNetwork(nn.Module):
 
         p6 = self.p6(results[-1])
         p7 = self.p7(F.relu(p6))
-        results.extend([p6, p7])
 
+        results.extend([p6, p7])
         return {str(i): f for i, f in enumerate(results)}
 
 
@@ -67,13 +67,12 @@ class BackboneWithFPN(nn.Module):
         if isinstance(feats, (list, tuple)) and len(feats) >= 3:
             c3, c4, c5 = feats[:3]
         else:
-            raise RuntimeError("resnet18(..., return_features=True) で C3,C4,C5 が返っていません")
+            raise RuntimeError("resnet18(..., return_features=True) が必要です")
         return self.fpn([c3, c4, c5])
 
 
 # ----- モデル構築 -----
 def build_model(device, num_classes=2, pretrained_backbone=False, weights_path=None):
-
     resnet = resnet18(pretrained=pretrained_backbone)
 
     fpn_out_channels = 256
@@ -157,8 +156,8 @@ def draw_image_and_save(pil_img, boxes, scores, labels, out_path):
     print("Saved:", out_path)
 
 
-# ----- 新機能：フォルダ内の複数画像で平均推論時間 -----
-def measure_dir(model, dir_path, device, score_thresh):
+# ----- 複数画像で平均推論時間 -----
+def measure_dir(model, dir_path, device, score_thresh, max_images):
     images = sorted(
         glob.glob(os.path.join(dir_path, "*.jpg"))
         + glob.glob(os.path.join(dir_path, "*.png"))
@@ -169,12 +168,16 @@ def measure_dir(model, dir_path, device, score_thresh):
         print("フォルダ内に画像がありません:", dir_path)
         sys.exit(1)
 
+    # max-images で画像数を制限
+    if max_images > 0:
+        images = images[:max_images]
+
     print(f"{len(images)} 枚の画像で平均推論時間を測定します")
 
-    times = []
+    transform = make_transform()
 
+    times = []
     for img_path in images:
-        transform = make_transform()
         img_tensor = transform(Image.open(img_path).convert("RGB")).to(device)
 
         if device.type == "cuda":
@@ -205,6 +208,8 @@ def parse_args():
     p.add_argument("--score", "-s", type=float, default=0.5)
     p.add_argument("--device", "-d", default="cuda")
     p.add_argument("--num-classes", type=int, default=2)
+    p.add_argument("--max-images", type=int, default=100,
+                   help="平均推論時間を測る最大画像数（デフォルト100）")
     return p.parse_args()
 
 
@@ -217,14 +222,14 @@ def main():
                         pretrained_backbone=False,
                         weights_path=args.weights)
 
-    # --- 複数画像フォルダで平均推論 ---
+    # 平均推論測定（フォルダ）
     if args.dir:
-        measure_dir(model, args.dir, device, args.score)
+        measure_dir(model, args.dir, device, args.score, args.max_images)
         return
 
-    # --- 1枚推論 ---
+    # 1枚推論
     if not args.image:
-        print("画像が指定されていません (--image または --dir を指定)")
+        print("画像が指定されていません (--image または --dir を指定してください)")
         return
 
     boxes, scores, elapsed_ms = run_inference_on_image(
