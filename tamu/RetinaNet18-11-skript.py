@@ -131,15 +131,24 @@ def make_transform():
 def run_inference_on_image(model, image_path, device, score_thresh=0.5, draw=True, out_path=None):
     transform = make_transform()
     img_pil = Image.open(image_path).convert("RGB")
-    img_tensor = transform(img_pil).to(device)
-    start_time = time.time()
+    
+    # ---- 画像変換（CPU） ----
+    img_cpu_tensor = transform(img_pil)
 
-    # モデルは list[Tensor] を受け取ることに注意
+    # ---- GPU へ転送（時間計測に含めない）----
+    img_tensor = img_cpu_tensor.to(device)
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+
+    # ---- 推論開始 ----
+    start_time = time.time()
     with torch.no_grad():
         outputs = model([img_tensor])
-
+    if device.type == "cuda":
+        torch.cuda.synchronize()
     end_time = time.time()
-    inference_time = (end_time - start_time) * 1000.0  # ミリ秒
+
+    inference_time = (end_time - start_time) * 1000.0
 
     if len(outputs) == 0:
         return [], [], inference_time
@@ -191,28 +200,31 @@ def parse_args():
     return p.parse_args()
 
 def measure_average_inference_time(model, image_path, device, score_thresh=0.5, repeat=50):
-        transform = make_transform()
-        img_pil = Image.open(image_path).convert("RGB")
-        img_tensor = transform(img_pil).to(device)
+    transform = make_transform()
+    img_pil = Image.open(image_path).convert("RGB")
+    img_tensor = transform(img_pil).to(device)
 
-    # ----- Warm-up -----
-        for _ in range(5):
-            _ = model([img_tensor])
-            if device.type == "cuda":
-                torch.cuda.synchronize()
+    if device.type == "cuda":
+        torch.cuda.synchronize()
 
-    # ----- Repeat推論 -----
-        times = []
-        for _ in range(repeat):
-            start = time.time()
-            _ = model([img_tensor])
-            if device.type == "cuda":
-                torch.cuda.synchronize()
-            end = time.time()
-            times.append((end - start) * 1000.0)  # ms
+    # Warm-up
+    for _ in range(5):
+        _ = model([img_tensor])
+        if device.type == "cuda":
+            torch.cuda.synchronize()
 
-        avg_ms = sum(times) / len(times)
-        return avg_ms
+    # Repeat inference
+    times = []
+    for _ in range(repeat):
+        start = time.time()
+        _ = model([img_tensor])
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        end = time.time()
+        times.append((end - start) * 1000.0)
+
+    return sum(times) / len(times)
+
 
 def main():
     args = parse_args()
