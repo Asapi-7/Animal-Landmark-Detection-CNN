@@ -199,31 +199,27 @@ def parse_args():
     p.add_argument("--num-classes", type=int, default=2, help="Number of classes (default: 2)")
     return p.parse_args()
 
-def measure_average_inference_time(model, image_path, device, score_thresh=0.5, repeat=50):
-    transform = make_transform()
-    img_pil = Image.open(image_path).convert("RGB")
-    img_tensor = transform(img_pil).to(device)
-
-    if device.type == "cuda":
-        torch.cuda.synchronize()
-
-    # Warm-up
-    for _ in range(5):
-        _ = model([img_tensor])
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-
-    # Repeat inference
+def measure_inference_time(model, dataloader, device):
+    model.eval()
     times = []
-    for _ in range(repeat):
-        start = time.time()
-        _ = model([img_tensor])
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-        end = time.time()
-        times.append((end - start) * 1000.0)
 
-    return sum(times) / len(times)
+    # 勾配計算を無効化（推論なので）
+    with torch.no_grad():
+        for images, _ in dataloader:     # ラベル/bbox が不要なら _ に
+            images = images.to(device)
+
+            torch.cuda.synchronize(device) if device != "cpu" else None
+            start = time.time()
+
+            outputs = model(images)
+
+            torch.cuda.synchronize(device) if device != "cpu" else None
+            end = time.time()
+
+            times.append(end - start)
+
+    avg_time = sum(times) / len(times)
+    return avg_time
 
 
 def main():
@@ -235,8 +231,9 @@ def main():
         model, args.image, device, score_thresh=args.score, draw=True, out_path=args.out
     )
 
-    avg_time = measure_average_inference_time(model, args.image, device)
-    print(f"Average inference time (50 runs): {avg_time:.2f} ms")
+    avg_time = measure_inference_time(model, test_loader, device)
+    print(f"平均推論時間: {avg_time * 1000:.2f} ms")
+
 
     print(f"Inference Time: {inference_time:.2f} ms")
     print("Detections:", len(boxes))
