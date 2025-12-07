@@ -30,11 +30,14 @@ print(f"Using device: {DEVICE}")
 def build_faster_rcnn_model(num_classes: int, weight_path: str, device: str):
     try:
         backbone = resnet_fpn_backbone('resnet18', pretrained=True)
-
         backbone.out_channels = 256
-        NUM_CLASSES = 2
-        model = FasterRCNN(backbone, num_classes=NUM_CLASSES)
 
+        anchor_sizes = ((16,), (32,), (64,), (128,), (256,))
+        aspect_ratios = ((0.5, 1.0, 2.0),) * 5
+        anchor_generator = AnchorGenerator(anchor_sizes, aspect_ratios)
+        
+        NUM_CLASSES = 2
+        model = FasterRCNN(backbone, num_classes=NUM_CLASSES, rpn_anchor_generator=anchor_generator)
 
         print(f"✅ Loading Faster R-CNN weights: {weight_path}")
         model.load_state_dict(torch.load(weight_path, map_location=device))
@@ -61,7 +64,7 @@ def build_landmark_resnet_model(num_keypoints: int, weight_path: str, device: st
 
 def load_ml_model():
     # Faster R-CNN
-    FASTER_RCNN_WEIGHTS = "fasterrcnn4_resnet18_adamw_epoch_20.pth" 
+    FASTER_RCNN_WEIGHTS = "fasterrcnn4_resnet18_W2_epoch_20.pth" 
     global face_detector, landmark_detector, RESNET_TRANSFORM
     face_detector = build_faster_rcnn_model(num_classes=2, weight_path=FASTER_RCNN_WEIGHTS, device=DEVICE)
 
