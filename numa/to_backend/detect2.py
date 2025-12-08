@@ -6,13 +6,19 @@ import torchvision
 from torchvision import transforms as T
 from torchvision.transforms import functional as F
 
-from torchvision.models.detection.faster_rcnn import FasterRCNN
+#bbx
+from torchvision.models import resnet18
+from torchvision.models.detection.faster_rcnn import FasterRCNN, FastRCNNPredictor
 from torchvision.models.detection.rpn import AnchorGenerator
-from resnet18_backbone import resnet18 
+from torchvision.ops import MultiScaleRoIAlign
+from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
+from torchvision.ops import box_iou
+import torch.optim as optim
 
 #lmks
-from resnet_map import LandmarkHeatmapRegressor
-from resnet_map import IMG_SIZE, NUM_LANDMARKS as NUM_KEYPOINTS
+from resnet_map4 import LandmarkHeatmapRegressor
+from resnet_map4 import IMG_SIZE, NUM_LANDMARKS as NUM_KEYPOINTS
+
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
@@ -20,22 +26,18 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 DEVICE = torch.device("cpu")
 print(f"Using device: {DEVICE}")
 
-
+#bbx
 def build_faster_rcnn_model(num_classes: int, weight_path: str, device: str):
     try:
-        backbone = resnet18(pretrained=False)
-        backbone.out_channels = 512
-        
-        anchor_generator = AnchorGenerator(
-            sizes=((16, 32, 64, 128),),
-            aspect_ratios=((0.5, 1.0, 2.0),),
-        )
+        backbone = resnet_fpn_backbone('resnet18', pretrained=True)
+        backbone.out_channels = 256
 
-        model = FasterRCNN(
-            backbone,
-            num_classes=num_classes,
-            rpn_anchor_generator=anchor_generator
-        )
+        anchor_sizes = ((16,), (32,), (64,), (128,), (256,))
+        aspect_ratios = ((0.5, 1.0, 2.0),) * 5
+        anchor_generator = AnchorGenerator(anchor_sizes, aspect_ratios)
+        
+        NUM_CLASSES = 2
+        model = FasterRCNN(backbone, num_classes=NUM_CLASSES, rpn_anchor_generator=anchor_generator)
 
         print(f"✅ Loading Faster R-CNN weights: {weight_path}")
         model.load_state_dict(torch.load(weight_path, map_location=device))
@@ -62,12 +64,12 @@ def build_landmark_resnet_model(num_keypoints: int, weight_path: str, device: st
 
 def load_ml_model():
     # Faster R-CNN
-    FASTER_RCNN_WEIGHTS = "fasterrcnn_resnet18_adam_20.pth" 
+    FASTER_RCNN_WEIGHTS = "fasterrcnn4_resnet18_W2_epoch_20.pth" 
     global face_detector, landmark_detector, RESNET_TRANSFORM
     face_detector = build_faster_rcnn_model(num_classes=2, weight_path=FASTER_RCNN_WEIGHTS, device=DEVICE)
 
     # lmks
-    LANDMARK_WEIGHTS = "model_map.pth" 
+    LANDMARK_WEIGHTS = "model_map4.pth" 
     landmark_detector = build_landmark_resnet_model(NUM_KEYPOINTS, LANDMARK_WEIGHTS, DEVICE)
 
     RESNET_TRANSFORM = T.Compose([
@@ -85,8 +87,8 @@ def decode_heatmaps_to_coordinates(heatmaps: torch.Tensor) -> np.ndarray:
     y_coords = max_indices // W
     x_coords = max_indices % W
     
-    x_coords = (x_coords.float() + 0.5) * (IMG_SIZE / W)
-    y_coords = (y_coords.float() + 0.5) * (IMG_SIZE / H) 
+    x_coords = x_coords * (IMG_SIZE / W)
+    y_coords = y_coords * (IMG_SIZE / H) 
     
     coordinates = torch.stack((x_coords, y_coords), dim=2).squeeze(0) 
     return coordinates.numpy()
