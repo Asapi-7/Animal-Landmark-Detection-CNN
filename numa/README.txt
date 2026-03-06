@@ -1,5 +1,7 @@
-train_lmks2.py
-11/5 train_lmks3.pyと同じ内容
-11/6 16:20 dropoutなど回帰ヘッド変更 NME:0.1173
-11/6 19:08 dropoutなし batch=64 epoch=32 NME:0.1183
-11/6       dropoutあり
+ランドマーク検出モデル
+to_backendにアプリで実際に使うモデルを用意。
+
+評価指標 (Metrics)
+以下の指標を用いてモデルの性能を評価：
+損失関数 (Loss): MSE (Mean Squared Error) - 予測ヒートマップと正解ヒートマップ間のピクセル単位の誤差を最小化します。
+評価指標 (Metric): NME (Normalized Mean Error) - 予測座標と正解座標間の平均ユークリッド距離を、顔のバウンディングボックス対角線長で正規化して算出します。値が小さいほど高性能です。
